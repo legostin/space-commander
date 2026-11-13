@@ -21,7 +21,7 @@ fn report(t: &Tree) {
         println!("  {:>12}  {:>9} файлов  {}", gb(c.alloc), c.files, c.name);
     }
     let started = std::time::Instant::now();
-    let top = t.top_files(0, 5, true);
+    let top = t.top_files(0, 5, true, 0);
     println!("— крупнейшие файлы ({} мс) —", started.elapsed().as_millis());
     for f in top {
         println!("  {:>12}  {}", gb(f.alloc), f.path);
@@ -70,6 +70,35 @@ fn main() {
             }
             println!("найдено правил: {}, можно освободить: {}, время: {} мс", items.len(), gb(total), started.elapsed().as_millis());
         }
-        _ => println!("режимы: walk <путь> | mft <буква> | junk"),
+        "apps" => {
+            let started = std::time::Instant::now();
+            let apps = space_commander_lib::apps::list();
+            println!("найдено: {} за {} мс", apps.len(), started.elapsed().as_millis());
+            for src in ["steam", "epic", "gog", "program"] {
+                let of: Vec<_> = apps.iter().filter(|a| a.source == src).collect();
+                println!("— {}: {} —", src, of.len());
+                for a in of.iter().take(6) {
+                    println!("  {:>10}  played={}  {}  [{}]", gb(a.reported_size), a.last_played, a.name, a.path);
+                }
+            }
+        }
+        "cache" => {
+            let t = scan_walk::scan(args.get(2).map(|s| s.as_str()).unwrap_or("C:\\"), &progress).expect("scan");
+            let started = std::time::Instant::now();
+            space_commander_lib::cache::save(&t).expect("save");
+            println!("сохранение: {} мс", started.elapsed().as_millis());
+            for f in std::fs::read_dir(space_commander_lib::cache::dir()).unwrap().flatten() {
+                println!("  {} — {} МБ", f.file_name().to_string_lossy(), f.metadata().unwrap().len() >> 20);
+            }
+            let started = std::time::Instant::now();
+            let mut back = space_commander_lib::cache::load_all();
+            println!("загрузка: {} мс, деревьев {}", started.elapsed().as_millis(), back.len());
+            let started = std::time::Instant::now();
+            back[0].apply_filter(0);
+            println!("пересчёт сумм: {} мс; совпало: {}", started.elapsed().as_millis(), back[0].nodes[0].alloc == t.nodes[0].alloc && back[0].nodes[0].files == t.nodes[0].files);
+            let snap = space_commander_lib::snapshot::capture(&t);
+            println!("снимок: {} записей, {} КБ JSON", snap.entries.len(), serde_json::to_string(&snap).unwrap().len() >> 10);
+        }
+        _ => println!("режимы: walk <путь> | mft <буква> | junk | apps | cache <путь>"),
     }
 }

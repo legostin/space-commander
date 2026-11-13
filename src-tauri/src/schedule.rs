@@ -4,8 +4,9 @@
 //! окно не открывается, выполняется очистка по выбранным правилам, результат пишется
 //! в журнал и показывается уведомлением.
 
-use crate::junk;
+use crate::i18n::{self, tr};
 use crate::winutil::{self, wide, CREATE_NO_WINDOW};
+use crate::{junk, snapshot};
 use serde::{Deserialize, Serialize};
 use std::os::windows::process::CommandExt;
 use std::path::PathBuf;
@@ -38,6 +39,27 @@ pub struct Task {
     pub enabled: bool,
     /// Заполняется при чтении: задача действительно есть в Планировщике.
     pub registered: bool,
+    /// Чистить, только когда на системном диске свободно меньше N процентов (0 — всегда).
+    pub only_below_pct: u32,
+    /// Сканировать диск и сообщать, если какая-то папка выросла больше чем на N ГБ (0 — выключено).
+    pub watch_growth_gb: u32,
+    /// Путь к приложению, с которым задача зарегистрирована: если приложение переехало, перерегистрируем.
+    pub exe: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+#[serde(default)]
+pub struct Settings {
+    /// "ru" или "en"
+    pub lang: String,
+}
+
+pub fn load_settings() -> Settings {
+    load("settings.json")
+}
+
+pub fn save_settings(s: &Settings) -> Result<(), String> {
+    save("settings.json", s)
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
@@ -263,6 +285,7 @@ pub fn save_task(mut task: Task) -> Result<Task, String> {
     }
     register(&task)?;
     task.registered = true;
+    task.exe = std::env::current_exe().map(|p| p.to_string_lossy().to_string()).unwrap_or_default();
     let mut tasks: Vec<Task> = load("tasks.json");
     match tasks.iter_mut().find(|t| t.id == task.id) {
         Some(t) => *t = task.clone(),
@@ -270,6 +293,28 @@ pub fn save_task(mut task: Task) -> Result<Task, String> {
     }
     save("tasks.json", &tasks)?;
     Ok(task)
+}
+
+/// Если приложение запущено из другого места (установили, перенесли), задачи в Планировщике
+/// всё ещё указывают на старый путь. Перерегистрируем те, что можем.
+pub fn refresh_registrations() {
+    let Ok(exe) = std::env::current_exe() else { return };
+    let exe = exe.to_string_lossy().to_string();
+    let mut tasks: Vec<Task> = load("tasks.json");
+    let mut changed = false;
+    for t in tasks.iter_mut() {
+        if t.exe.eq_ignore_ascii_case(&exe) || (t.elevated && !winutil::is_elevated()) {
+            continue;
+        }
+        if register(t).is_ok() {
+            log_line(&format!("задача {} перерегистрирована: {} → {}", t.id, t.exe, exe));
+            t.exe = exe.clone();
+            changed = true;
+        }
+    }
+    if changed {
+        let _ = save("tasks.json", &tasks);
+    }
 }
 
 pub fn delete_task(id: &str) -> Result<(), String> {
@@ -346,7 +391,10 @@ pub fn toast(title: &str, text: &str) {
 }
 
 fn human(bytes: u64) -> String {
-    const U: [&str; 5] = ["Б", "КБ", "МБ", "ГБ", "ТБ"];
+    const RU: [&str; 5] = ["Б", "КБ", "МБ", "ГБ", "ТБ"];
+    const EN: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
+    let en = i18n::is_english();
+    let units = if en { EN } else { RU };
     let mut v = bytes as f64;
     let mut i = 0;
     while v >= 1024.0 && i < 4 {
@@ -354,9 +402,11 @@ fn human(bytes: u64) -> String {
         i += 1;
     }
     if i == 0 {
-        format!("{} {}", bytes, U[0])
+        format!("{} {}", bytes, units[0])
+    } else if en {
+        format!("{:.1} {}", v, units[i])
     } else {
-        format!("{:.1} {}", v, U[i]).replace('.', ",")
+        format!("{:.1} {}", v, units[i]).replace('.', ",")
     }
 }
 
@@ -381,14 +431,42 @@ pub fn run_headless(id: &str) -> i32 {
     if !missing.is_empty() {
         log_line(&format!("задача {}: в окружении нет переменных {:?} — часть правил будет пропущена", id, missing));
     }
-    let report = junk::clean(&task.rules, |_, _, _| {});
+    i18n::set_english(load_settings().lang == "en");
+
+    // Условие «только когда места мало» проверяем по системному диску.
+    let sys_root = winutil::volume_root(&std::env::var("SystemDrive").unwrap_or_else(|_| "C:".into()));
+    let sys_free_pct = winutil::list_drives()
+        .iter()
+        .find(|d| d.root.eq_ignore_ascii_case(&sys_root))
+        .map(|d| d.free as f64 / d.total.max(1) as f64 * 100.0);
+    let enough_space = task.only_below_pct > 0 && sys_free_pct.map(|p| p >= task.only_below_pct as f64).unwrap_or(false);
+
+    let mut notes: Vec<String> = Vec::new();
+    let report = if enough_space {
+        notes.push(format!(
+            "{} {:.0}% — {}",
+            tr("свободно", "free space is"),
+            sys_free_pct.unwrap_or(0.0),
+            tr("очистка не понадобилась", "cleanup was not needed")
+        ));
+        junk::CleanReport::default()
+    } else {
+        // В фоне не трогаем кеши приложений, которые сейчас запущены.
+        junk::clean(&task.rules, true, |_, _, _| {})
+    };
+    if !report.skipped.is_empty() {
+        notes.push(format!("{}: {}", tr("запущены, пропущены", "running, skipped"), report.skipped.join(", ")));
+    }
+    notes.extend(report.errors.iter().take(3).cloned());
     log_line(&format!("задача {}: освобождено {} Б, файлов {}, пропущено {}", id, report.freed, report.files, report.failed));
+
+    let growth = if task.watch_growth_gb > 0 { watch_growth(&sys_root, task.watch_growth_gb) } else { None };
+    if let Some((path, delta)) = &growth {
+        notes.insert(0, format!("{}: +{}", path, human(*delta)));
+    }
     record_history(0);
     let drives = drive_samples();
-    let mut note = String::new();
-    if !report.errors.is_empty() {
-        note = report.errors.iter().take(3).cloned().collect::<Vec<_>>().join("; ");
-    }
+    let note = notes.join("; ");
     let mut log: Vec<RunLog> = load("runs.json");
     log.push(RunLog {
         task_id: task.id.clone(),
@@ -406,21 +484,50 @@ pub fn run_headless(id: &str) -> i32 {
     }
     let _ = save("runs.json", &log);
 
-    if task.notify && (report.freed > 0 || !task.rules.is_empty()) {
-        toast(&task.name, &format!("Освобождено {} · удалено файлов: {}", human(report.freed), report.files));
+    if task.notify && !enough_space && (report.freed > 0 || !task.rules.is_empty()) {
+        toast(
+            &task.name,
+            &format!("{} {} · {}: {}", tr("Освобождено", "Freed"), human(report.freed), tr("удалено файлов", "files removed"), report.files),
+        );
+    }
+    if let Some((path, delta)) = &growth {
+        toast(tr("Папка заметно выросла", "A folder has grown"), &format!("{}: +{}", path, human(*delta)));
     }
     if task.low_space_pct > 0 {
         for d in &drives {
             let pct = d.free as f64 / d.total.max(1) as f64 * 100.0;
             if pct < task.low_space_pct as f64 {
                 toast(
-                    &format!("На диске {} заканчивается место", d.root.trim_end_matches('\\')),
-                    &format!("Свободно {} ({:.0}%)", human(d.free), pct),
+                    &format!("{} {}", tr("Заканчивается место на диске", "Running low on space on drive"), d.root.trim_end_matches('\\')),
+                    &format!("{} {} ({:.0}%)", tr("Свободно", "Free:"), human(d.free), pct),
                 );
             }
         }
     }
     0
+}
+
+/// Сканирует диск, сохраняет снимок и сравнивает с предыдущим снимком того же режима.
+/// Возвращает самую выросшую папку, если прирост не меньше порога.
+fn watch_growth(root: &str, threshold_gb: u32) -> Option<(String, u64)> {
+    let progress = crate::scan_walk::Progress::default();
+    let letter = root.chars().next()?;
+    let tree = if winutil::is_elevated() {
+        crate::scan_mft::scan(letter, &progress).or_else(|_| crate::scan_walk::scan(root, &progress))
+    } else {
+        crate::scan_walk::scan(root, &progress)
+    }
+    .ok()?;
+    let snap = snapshot::capture(&tree);
+    drop(tree);
+    // Обход папок и чтение MFT считают немного по-разному — сравниваем только одинаковые режимы.
+    let prev = snapshot::list(root).into_iter().find(|m| m.mode == snap.meta.mode).and_then(|m| snapshot::load(&m.id));
+    let _ = snapshot::save(&snap);
+    let diff = snapshot::diff(&prev?, &snap, 5);
+    diff.items
+        .into_iter()
+        .find(|i| i.delta > 0 && i.delta as u64 >= (threshold_gb as u64) << 30)
+        .map(|i| (i.path, i.delta as u64))
 }
 
 #[cfg(test)]

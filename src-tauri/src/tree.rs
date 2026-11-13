@@ -24,6 +24,7 @@ pub const F_FILTERED: u16 = 512;
 
 pub const REST_ID: u32 = u32::MAX;
 
+#[repr(C)]
 #[derive(Clone, Copy, Default)]
 pub struct Node {
     /// Логический размер (для папок — сумма).
@@ -434,7 +435,9 @@ impl Tree {
         out
     }
 
-    pub fn top_files(&self, id: u32, limit: usize, by_alloc: bool) -> Vec<FileDto> {
+    /// Крупнейшие файлы внутри узла. `older_than > 0` оставляет только те, что не менялись
+    /// с указанного момента (unix-секунды).
+    pub fn top_files(&self, id: u32, limit: usize, by_alloc: bool, older_than: i64) -> Vec<FileDto> {
         let mut heap: BinaryHeap<Reverse<(u64, u32)>> = BinaryHeap::with_capacity(limit + 1);
         let mut stack = vec![id];
         while let Some(cur) = stack.pop() {
@@ -453,6 +456,8 @@ impl Tree {
             }
             if n.is_dir() {
                 stack.extend(self.child_ids(cur));
+            } else if older_than > 0 && (n.mtime == 0 || n.mtime > older_than) {
+                continue;
             } else {
                 heap.push(Reverse((m, cur)));
                 if heap.len() > limit {
@@ -759,8 +764,13 @@ pub mod tests {
     #[test]
     fn top_search_ext() {
         let t = sample();
-        let top = t.top_files(0, 2, true);
+        let top = t.top_files(0, 2, true, 0);
         assert_eq!(top.iter().map(|f| f.size).collect::<Vec<_>>(), [500, 300]);
+        let mut aged = sample();
+        aged.nodes[2].mtime = 5000; // pagefile свежий
+        aged.nodes[4].mtime = 100; // movie старый
+        let old = aged.top_files(0, 10, true, 1000);
+        assert_eq!(old.iter().map(|f| f.name.as_str()).collect::<Vec<_>>(), ["movie.MKV"], "без даты и свежие не попадают");
         assert_eq!(t.search("MOVIE", 10, true).total, 1);
         assert_eq!(t.search("*.js", 10, true).items[0].name, "big.js");
         assert_eq!(t.search("проект", 10, true).total, 1);
@@ -797,7 +807,7 @@ pub mod tests {
         assert!(!t.valid(5) && !t.valid(9), "скрыта папка и всё, что в ней");
         assert_eq!(t.dir_view(0, true).children.len(), 1);
         assert_eq!(t.search("big", 10, true).total, 0);
-        assert_eq!(t.top_files(0, 10, true).len(), 2);
+        assert_eq!(t.top_files(0, 10, true, 0).len(), 2);
         assert_eq!(t.summary().hidden_files, 3);
 
         t.apply_filter(F_SYSTEM);

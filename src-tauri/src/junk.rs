@@ -40,6 +40,8 @@ pub struct Rule {
     pub min_age_h: u64,
     pub hint: &'static str,
     pub action: &'static str,
+    /// Процессы приложения (в нижнем регистре): пока они запущены, кеш очистится не полностью.
+    pub procs: Vec<String>,
 }
 
 impl Rule {
@@ -56,7 +58,12 @@ impl Rule {
             min_age_h: 0,
             hint: "",
             action: "",
+            procs: Vec::new(),
         }
+    }
+    fn procs(mut self, names: &[&str]) -> Rule {
+        self.procs = names.iter().map(|s| s.to_lowercase()).collect();
+        self
     }
     fn admin(mut self, reason: &'static str) -> Rule {
         self.needs_admin = true;
@@ -97,6 +104,8 @@ pub struct JunkItem {
     pub targets: Vec<TargetInfo>,
     pub hint: String,
     pub action: String,
+    /// Приложение сейчас запущено.
+    pub running: bool,
 }
 
 #[derive(Serialize, Clone, Debug, Default)]
@@ -106,6 +115,8 @@ pub struct CleanReport {
     pub failed: u64,
     pub errors: Vec<String>,
     pub items: Vec<CleanedItem>,
+    /// Правила, пропущенные потому, что приложение запущено.
+    pub skipped: Vec<String>,
 }
 
 #[derive(Serialize, Clone, Debug, Default)]
@@ -331,6 +342,7 @@ fn evaluate(rule: &Rule) -> JunkItem {
         targets: vec![],
         hint: rule.hint.to_string(),
         action: rule.action.to_string(),
+        running: false,
     };
     if rule.id == "recycle-bin" {
         let u = recycle_bin_usage();
@@ -579,26 +591,26 @@ fn static_rules() -> Vec<Rule> {
             "Индексы проектов IDE. После очистки IDE переиндексирует проекты при открытии.",
             "caution", vec![c("%LOCALAPPDATA%\\JetBrains\\*\\caches"), c("%LOCALAPPDATA%\\JetBrains\\*\\index"), c("%LOCALAPPDATA%\\JetBrains\\*\\log")]),
         Rule::new("vscode-cache", "dev", "Кеш расширений VS Code", "Скачанные установщики расширений и журналы.", "safe",
-            vec![c("%APPDATA%\\Code\\CachedExtensionVSIXs"), c("%APPDATA%\\Code\\logs"), c("%APPDATA%\\Code\\CachedData")]),
+            vec![c("%APPDATA%\\Code\\CachedExtensionVSIXs"), c("%APPDATA%\\Code\\logs"), c("%APPDATA%\\Code\\CachedData")]).procs(&["code.exe"]),
         Rule::new("hf-cache", "dev", "Модели Hugging Face и PyTorch",
             "Скачанные нейросетевые модели. Могут занимать десятки гигабайт; при следующем использовании скачаются заново.",
             "caution", vec![c("%USERPROFILE%\\.cache\\huggingface\\hub"), c("%USERPROFILE%\\.cache\\torch\\hub")]),
 
         // ── Приложения ──
         Rule::new("spotify", "apps", "Spotify", "Кеш прослушанной музыки.", "safe",
-            vec![c("%LOCALAPPDATA%\\Spotify\\Storage"), c("%LOCALAPPDATA%\\Spotify\\Data")]),
+            vec![c("%LOCALAPPDATA%\\Spotify\\Storage"), c("%LOCALAPPDATA%\\Spotify\\Data")]).procs(&["spotify.exe"]),
         Rule::new("telegram", "apps", "Telegram Desktop",
             "Кеш просмотренных фото и видео. Сообщения и вложения остаются в облаке и подгрузятся снова.",
-            "caution", vec![c("%APPDATA%\\Telegram Desktop\\tdata\\user_data\\cache"), c("%APPDATA%\\Telegram Desktop\\tdata\\user_data\\media_cache")]),
+            "caution", vec![c("%APPDATA%\\Telegram Desktop\\tdata\\user_data\\cache"), c("%APPDATA%\\Telegram Desktop\\tdata\\user_data\\media_cache")]).procs(&["telegram.exe"]),
         Rule::new("steam", "apps", "Steam",
             "Кеш встроенного браузера, шейдеров и незавершённые загрузки. Игры и сохранения не затрагиваются.",
             "caution", vec![c("%ProgramFiles(x86)%\\Steam\\appcache\\httpcache"), c("%ProgramFiles(x86)%\\Steam\\steamapps\\shadercache"),
-                c("%LOCALAPPDATA%\\Steam\\htmlcache")]),
+                c("%LOCALAPPDATA%\\Steam\\htmlcache")]).procs(&["steam.exe"]),
         Rule::new("epic", "apps", "Epic Games Launcher", "Кеш встроенного браузера лаунчера.", "safe",
-            vec![c("%LOCALAPPDATA%\\EpicGamesLauncher\\Saved\\webcache*")]),
+            vec![c("%LOCALAPPDATA%\\EpicGamesLauncher\\Saved\\webcache*")]).procs(&["epicgameslauncher.exe"]),
         Rule::new("firefox", "browsers", "Firefox", "Кеш страниц. Закладки, пароли и история не затрагиваются.", "safe",
             vec![c("%LOCALAPPDATA%\\Mozilla\\Firefox\\Profiles\\*\\cache2"), c("%LOCALAPPDATA%\\Mozilla\\Firefox\\Profiles\\*\\startupCache"),
-                c("%LOCALAPPDATA%\\Mozilla\\Firefox\\Profiles\\*\\thumbnails")]),
+                c("%LOCALAPPDATA%\\Mozilla\\Firefox\\Profiles\\*\\thumbnails")]).procs(&["firefox.exe"]),
 
         // ── Загрузки ──
         Rule::new("old-installers", "downloads", "Старые установщики в «Загрузках»",
@@ -624,6 +636,15 @@ fn static_rules() -> Vec<Rule> {
             "info", vec![p("%LOCALAPPDATA%\\Docker\\wsl\\disk\\docker_data.vhdx"), p("%LOCALAPPDATA%\\Docker\\wsl\\data\\ext4.vhdx"),
                 p("%LOCALAPPDATA%\\Docker\\wsl\\main\\ext4.vhdx"), p("%LOCALAPPDATA%\\Packages\\*\\LocalState\\ext4.vhdx"), p("%LOCALAPPDATA%\\wsl\\*\\ext4.vhdx")])
             .info("Сначала docker system prune -a, затем wsl --shutdown и сжатие диска: Optimize-VHD или diskpart → compact vdisk.", ""),
+        Rule::new("restore-points", "info", "Точки восстановления и теневые копии",
+            "Снимки системы для отката после неудачных обновлений и драйверов. Хранятся в закрытой папке System Volume Information.",
+            "info", vec![p("%SystemDrive%\\System Volume Information")])
+            .admin("Папка доступна только системе: её размер виден лишь с правами администратора.")
+            .info("Лимит места и удаление старых точек: «Защита системы» → выберите диск → «Настроить». Совсем отключать защиту не стоит — хватит уменьшить лимит.", "tool:system-protection"),
+        Rule::new("winsxs", "info", "Хранилище компонентов Windows (WinSxS)",
+            "Все версии системных файлов для обновлений и восстановления. Большая часть — жёсткие ссылки на файлы в самой Windows, поэтому реально занято меньше, чем показано.",
+            "info", vec![p("%WINDIR%\\WinSxS")])
+            .info("Старые версии компонентов убирает команда Dism /Online /Cleanup-Image /StartComponentCleanup в терминале администратора или «Очистка диска» → «Очистить системные файлы».", "tool:disk-cleanup"),
     ];
     v.retain(|r| r.id == "recycle-bin" || !r.specs.is_empty());
     v
@@ -676,36 +697,47 @@ fn find_profiles(dir: &Path, rel: &str, depth: u32, out: &mut Vec<PathBuf>) {
     }
 }
 
-const KNOWN_APPS: &[(&str, &str, &str)] = &[
-    // (начало относительного пути в нижнем регистре, название, категория)
-    ("google\\chrome", "Google Chrome", "browsers"),
-    ("microsoft\\edge", "Microsoft Edge", "browsers"),
-    ("bravesoftware\\brave-browser", "Brave", "browsers"),
-    ("yandex\\yandexbrowser", "Яндекс Браузер", "browsers"),
-    ("vivaldi", "Vivaldi", "browsers"),
-    ("opera software", "Opera", "browsers"),
-    ("chromium", "Chromium", "browsers"),
-    ("thorium", "Thorium", "browsers"),
-    ("arc", "Arc", "browsers"),
-    ("discord", "Discord", "apps"),
-    ("slack", "Slack", "apps"),
-    ("code", "Visual Studio Code", "apps"),
-    ("cursor", "Cursor", "apps"),
-    ("claude", "Claude", "apps"),
-    ("microsoft\\teams", "Microsoft Teams", "apps"),
-    ("packages\\msteams", "Microsoft Teams", "apps"),
-    ("packages\\microsoft.outlookforwindows", "Outlook", "apps"),
-    ("notion", "Notion", "apps"),
-    ("obsidian", "Obsidian", "apps"),
-    ("figma", "Figma", "apps"),
-    ("postman", "Postman", "apps"),
-    ("zoom", "Zoom", "apps"),
-    ("signal", "Signal", "apps"),
-    ("whatsapp", "WhatsApp", "apps"),
-    ("github desktop", "GitHub Desktop", "apps"),
-    ("spotify", "Spotify (веб-часть)", "apps"),
-    ("steam", "Steam (веб-часть)", "apps"),
+const KNOWN_APPS: &[(&str, &str, &str, &[&str])] = &[
+    // (начало относительного пути в нижнем регистре, название, категория, процессы приложения)
+    ("google\\chrome", "Google Chrome", "browsers", &["chrome.exe"]),
+    ("microsoft\\edge", "Microsoft Edge", "browsers", &["msedge.exe"]),
+    ("bravesoftware\\brave-browser", "Brave", "browsers", &["brave.exe"]),
+    ("yandex\\yandexbrowser", "Яндекс Браузер", "browsers", &["browser.exe"]),
+    ("vivaldi", "Vivaldi", "browsers", &["vivaldi.exe"]),
+    ("opera software", "Opera", "browsers", &["opera.exe"]),
+    ("chromium", "Chromium", "browsers", &["chromium.exe"]),
+    ("thorium", "Thorium", "browsers", &["thorium.exe"]),
+    ("arc", "Arc", "browsers", &["arc.exe"]),
+    ("discord", "Discord", "apps", &["discord.exe"]),
+    ("slack", "Slack", "apps", &["slack.exe"]),
+    ("code", "Visual Studio Code", "apps", &["code.exe"]),
+    ("cursor", "Cursor", "apps", &["cursor.exe"]),
+    ("claude", "Claude", "apps", &["claude.exe"]),
+    ("microsoft\\teams", "Microsoft Teams", "apps", &["teams.exe", "ms-teams.exe"]),
+    ("packages\\msteams", "Microsoft Teams", "apps", &["ms-teams.exe"]),
+    ("packages\\microsoft.outlookforwindows", "Outlook", "apps", &["olk.exe"]),
+    ("notion", "Notion", "apps", &["notion.exe"]),
+    ("obsidian", "Obsidian", "apps", &["obsidian.exe"]),
+    ("figma", "Figma", "apps", &["figma.exe"]),
+    ("postman", "Postman", "apps", &["postman.exe"]),
+    ("zoom", "Zoom", "apps", &["zoom.exe"]),
+    ("signal", "Signal", "apps", &["signal.exe"]),
+    ("whatsapp", "WhatsApp", "apps", &["whatsapp.exe"]),
+    ("github desktop", "GitHub Desktop", "apps", &["githubdesktop.exe"]),
+    ("spotify", "Spotify (веб-часть)", "apps", &["spotify.exe"]),
+    ("steam", "Steam (веб-часть)", "apps", &["steam.exe", "steamwebhelper.exe"]),
 ];
+
+/// Для приложения не из списка: процесс с тем же именем, что и папка (`unityhub` → `unityhub.exe`).
+fn guess_process(key: &str) -> Vec<String> {
+    let last = key.rsplit('\\').next().unwrap_or(key);
+    let stem: String = last.split('_').next().unwrap_or(last).chars().filter(|c| c.is_alphanumeric()).collect::<String>().to_lowercase();
+    if stem.len() < 3 {
+        vec![]
+    } else {
+        vec![format!("{}.exe", stem)]
+    }
+}
 
 /// Из относительного пути профиля делает ключ приложения: всё до «User Data»/«EBWebView»/имени профиля.
 fn app_key(rel: &str) -> String {
@@ -790,9 +822,9 @@ fn chromium_rules() -> Vec<Rule> {
         let known = KNOWN_APPS.iter().find(|k| {
             key.strip_prefix(k.0).map(|rest| rest.is_empty() || rest.starts_with('\\') || rest.starts_with('_')).unwrap_or(false)
         });
-        let (title, category) = match known {
-            Some(k) => (k.1.to_string(), k.2),
-            None => (pretty_name(&shown), "apps"),
+        let (title, category, procs) = match known {
+            Some(k) => (k.1.to_string(), k.2, k.3.iter().map(|s| s.to_string()).collect::<Vec<_>>()),
+            None => (pretty_name(&shown), "apps", guess_process(&key)),
         };
         let mut specs = Vec::new();
         for prof in &profiles {
@@ -825,7 +857,9 @@ fn chromium_rules() -> Vec<Rule> {
             prev.specs.extend(specs);
             continue;
         }
-        rules.push(Rule::new(&format!("chromium:{}", key), category, &title, desc, "safe", specs));
+        let mut rule = Rule::new(&format!("chromium:{}", key), category, &title, desc, "safe", specs);
+        rule.procs = procs;
+        rules.push(rule);
     }
     rules
 }
@@ -839,21 +873,35 @@ pub fn all_rules() -> Vec<Rule> {
 /// Находит и взвешивает весь мусор. Пустые правила в результат не попадают.
 pub fn scan() -> Vec<JunkItem> {
     let rules = all_rules();
-    let mut items: Vec<JunkItem> = rules.par_iter().map(evaluate).collect();
+    let running = winutil::running_processes();
+    let mut items: Vec<JunkItem> = rules
+        .par_iter()
+        .map(|r| {
+            let mut item = evaluate(r);
+            item.running = r.procs.iter().any(|p| running.contains(p));
+            item
+        })
+        .collect();
     items.retain(|i| i.size > 0 || i.files > 0 || (!i.accessible && i.needs_admin));
     items
 }
 
-/// Чистит выбранные правила. Правила, требующие прав администратора, без них пропускаются.
-pub fn clean(ids: &[String], mut on_progress: impl FnMut(usize, usize, &str)) -> CleanReport {
+/// Чистит выбранные правила. Правила, требующие прав администратора, без них пропускаются;
+/// при `skip_running` пропускаются и приложения, которые сейчас запущены.
+pub fn clean(ids: &[String], skip_running: bool, mut on_progress: impl FnMut(usize, usize, &str)) -> CleanReport {
     let rules = all_rules();
     let elevated = winutil::is_elevated();
+    let running = if skip_running { winutil::running_processes() } else { Default::default() };
     let selected: Vec<&Rule> = rules.iter().filter(|r| ids.contains(&r.id)).collect();
     let mut report = CleanReport::default();
     for (i, rule) in selected.iter().enumerate() {
         on_progress(i, selected.len(), &rule.title);
         if rule.needs_admin && !elevated {
-            report.errors.push(format!("{} — пропущено: нужны права администратора", rule.title));
+            report.errors.push(format!("{} — {}", rule.title, crate::i18n::tr("пропущено: нужны права администратора", "skipped: administrator rights required")));
+            continue;
+        }
+        if rule.procs.iter().any(|p| running.contains(p)) {
+            report.skipped.push(rule.title.clone());
             continue;
         }
         let st = clean_rule(rule);

@@ -245,6 +245,46 @@ pub fn recycle(paths: &[&str]) -> Result<(), String> {
     }
 }
 
+fn known_folder(csidl: i32, env_fallback: &str) -> std::path::PathBuf {
+    let mut buf = [0u16; 260];
+    let hr = unsafe { windows_sys::Win32::UI::Shell::SHGetFolderPathW(null_mut(), csidl, null_mut(), 0, buf.as_mut_ptr()) };
+    let known = from_wide(&buf);
+    if hr == 0 && !known.is_empty() {
+        std::path::PathBuf::from(known)
+    } else {
+        std::path::PathBuf::from(std::env::var(env_fallback).unwrap_or_else(|_| ".".into()))
+    }
+}
+
+/// `AppData\Local` текущего пользователя.
+pub fn local_appdata() -> std::path::PathBuf {
+    known_folder(0x1C, "LOCALAPPDATA")
+}
+
+/// Имена запущенных процессов в нижнем регистре (`chrome.exe`).
+pub fn running_processes() -> std::collections::HashSet<String> {
+    use windows_sys::Win32::System::Diagnostics::ToolHelp::{CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS};
+    let mut out = std::collections::HashSet::new();
+    unsafe {
+        let snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+        if snap == windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE {
+            return out;
+        }
+        let mut pe: PROCESSENTRY32W = std::mem::zeroed();
+        pe.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
+        if Process32FirstW(snap, &mut pe) != 0 {
+            loop {
+                out.insert(from_wide(&pe.szExeFile).to_lowercase());
+                if Process32NextW(snap, &mut pe) == 0 {
+                    break;
+                }
+            }
+        }
+        CloseHandle(snap);
+    }
+    out
+}
+
 pub fn user_name() -> String {
     let user = std::env::var("USERNAME").unwrap_or_default();
     match std::env::var("USERDOMAIN") {

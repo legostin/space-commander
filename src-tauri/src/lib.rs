@@ -1,12 +1,17 @@
+pub mod apps;
+pub mod cache;
 pub mod categories;
 pub mod dupes;
+pub mod i18n;
 pub mod junk;
 pub mod scan_mft;
 pub mod scan_walk;
 pub mod schedule;
+pub mod snapshot;
 pub mod tree;
 pub mod winutil;
 
+use i18n::tr;
 use scan_walk::Progress;
 use serde::Serialize;
 use std::collections::HashMap;
@@ -14,7 +19,8 @@ use std::sync::atomic::{AtomicBool, AtomicU16, Ordering::Relaxed};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager, State};
-use tree::{Tree, F_DELETED};
+use tauri_plugin_dialog::DialogExt;
+use tree::Tree;
 
 #[derive(Default)]
 pub struct AppState {
@@ -31,7 +37,7 @@ fn key(root: &str) -> String {
 
 fn with_tree<T>(state: &AppState, root: &str, f: impl FnOnce(&Tree) -> T) -> Result<T, String> {
     let trees = state.trees.read().unwrap();
-    let tree = trees.get(&key(root)).ok_or("Этот диск ещё не просканирован")?;
+    let tree = trees.get(&key(root)).ok_or_else(|| tr("Этот диск ещё не просканирован", "This drive has not been scanned yet").to_string())?;
     Ok(f(tree))
 }
 
@@ -39,7 +45,7 @@ fn check_id(tree: &Tree, id: u32) -> Result<(), String> {
     if tree.valid(id) {
         Ok(())
     } else {
-        Err("Объект больше не существует".into())
+        Err(tr("Объект больше не существует", "The item no longer exists").into())
     }
 }
 
@@ -95,18 +101,40 @@ fn reveal(path: String) -> Result<(), String> {
 #[tauri::command]
 fn open_path(path: String) -> Result<(), String> {
     if !std::path::Path::new(&path).exists() {
-        return Err("Путь не существует".into());
+        return Err(tr("Путь не существует", "The path does not exist").into());
     }
     winutil::shell_open(&path)
 }
 
-/// Открывает раздел «Параметров» Windows. Разрешены только адреса ms-settings.
+/// Открывает штатное средство Windows. Разрешён только короткий список адресов:
+/// разделы «Параметров», «Защита системы», «Очистка диска» и удаление игры через Steam.
 #[tauri::command]
 fn open_settings(uri: String) -> Result<(), String> {
-    if !uri.starts_with("ms-settings:") {
-        return Err("Разрешены только адреса ms-settings:".into());
+    let spawn = |exe: &str| std::process::Command::new(exe).spawn().map(|_| ()).map_err(|e| e.to_string());
+    match uri.as_str() {
+        "tool:system-protection" => spawn("SystemPropertiesProtection.exe"),
+        "tool:disk-cleanup" => spawn("cleanmgr.exe"),
+        "tool:apps" => winutil::shell_open("ms-settings:appsfeatures"),
+        u if u.starts_with("ms-settings:") && u[12..].chars().all(|c| c.is_ascii_alphanumeric() || c == '-') => winutil::shell_open(u),
+        u if u.strip_prefix("steam://uninstall/").map(|id| !id.is_empty() && id.chars().all(|c| c.is_ascii_digit())).unwrap_or(false) => {
+            winutil::shell_open(u)
+        }
+        _ => Err(tr("Этот адрес открывать нельзя", "This address is not allowed").into()),
     }
-    winutil::shell_open(&uri)
+}
+
+#[tauri::command]
+fn set_language(lang: String) {
+    let en = lang == "en";
+    i18n::set_english(en);
+    let _ = schedule::save_settings(&schedule::Settings { lang: if en { "en" } else { "ru" }.into() });
+}
+
+/// Системный диалог выбора папки для сканирования.
+#[tauri::command(async)]
+fn pick_folder(app: AppHandle) -> Option<String> {
+    let picked = app.dialog().file().set_title(tr("Папка для сканирования", "Folder to scan")).blocking_pick_folder()?;
+    picked.into_path().ok().map(|p| p.to_string_lossy().to_string())
 }
 
 // ───────────── Сканирование ─────────────
@@ -115,6 +143,7 @@ fn open_settings(uri: String) -> Result<(), String> {
 struct ProgressEvent {
     root: String,
     mode: String,
+    quiet: bool,
     files: u64,
     dirs: u64,
     bytes: u64,
@@ -126,6 +155,7 @@ struct ProgressEvent {
 #[derive(Serialize, Clone)]
 struct ScanDone {
     summary: tree::ScanSummary,
+    quiet: bool,
     /// Почему быстрый режим не сработал и пришлось обходить папки.
     note: Option<String>,
 }
@@ -135,14 +165,17 @@ struct ScanError {
     root: String,
     message: String,
     cancelled: bool,
+    quiet: bool,
 }
 
+/// `quiet` — фоновое обновление: интерфейс не закрывается индикатором и остаётся на текущем экране.
 #[tauri::command]
-fn start_scan(app: AppHandle, state: State<AppState>, root: String, mode: String) -> Result<(), String> {
+fn start_scan(app: AppHandle, state: State<AppState>, root: String, mode: String, quiet: Option<bool>) -> Result<(), String> {
+    let quiet = quiet.unwrap_or(false);
     let progress = {
         let mut slot = state.scan.lock().unwrap();
         if slot.is_some() {
-            return Err("Сканирование уже идёт".into());
+            return Err(tr("Сканирование уже идёт", "A scan is already running").into());
         }
         let p = Arc::new(Progress::default());
         *slot = Some(p.clone());
@@ -167,6 +200,7 @@ fn start_scan(app: AppHandle, state: State<AppState>, root: String, mode: String
                         ProgressEvent {
                             root: root.clone(),
                             mode: mode_now.lock().unwrap().clone(),
+                            quiet,
                             files: p.files.load(Relaxed),
                             dirs: p.dirs.load(Relaxed),
                             bytes: p.bytes.load(Relaxed),
@@ -206,18 +240,25 @@ fn start_scan(app: AppHandle, state: State<AppState>, root: String, mode: String
         *state.scan.lock().unwrap() = None;
         match result {
             Ok(mut tree) => {
+                // Снимок размеров — пока дерево полное, до фильтра скрытых объектов.
+                let _ = snapshot::save(&snapshot::capture(&tree));
                 let mask = state.hide_mask.load(Relaxed);
                 if mask != 0 {
                     tree.apply_filter(mask);
                 }
                 let summary = tree.summary();
-                state.trees.write().unwrap().insert(key(&tree.root_path), tree);
+                let tree_key = key(&tree.root_path);
+                state.trees.write().unwrap().insert(tree_key.clone(), tree);
                 schedule::record_history(600);
-                let _ = app.emit("scan-done", ScanDone { summary, note });
+                let _ = app.emit("scan-done", ScanDone { summary, quiet, note });
+                // Кеш на диск пишем уже после того, как интерфейс получил результат.
+                if let Some(t) = state.trees.read().unwrap().get(&tree_key) {
+                    let _ = cache::save(t);
+                }
             }
             Err(e) => {
                 let cancelled = e == "cancelled";
-                let _ = app.emit("scan-error", ScanError { root, message: e, cancelled });
+                let _ = app.emit("scan-error", ScanError { root, message: e, cancelled, quiet });
             }
         }
     });
@@ -234,6 +275,12 @@ fn cancel_scan(state: State<AppState>) {
 #[tauri::command]
 fn scan_summaries(state: State<AppState>) -> Vec<tree::ScanSummary> {
     state.trees.read().unwrap().values().map(|t| t.summary()).collect()
+}
+
+/// Убирает результат сканирования из памяти (для папок, отсканированных отдельно).
+#[tauri::command]
+fn forget_scan(state: State<AppState>, root: String) {
+    state.trees.write().unwrap().remove(&key(&root));
 }
 
 /// Показывать ли объекты с атрибутами «скрытый» и «системный». Скрытые не попадают
@@ -272,9 +319,14 @@ fn get_subtree(state: State<AppState>, root: String, id: u32, budget: usize, by_
     with_tree(&state, &root, |t| check_id(t, id).map(|_| t.subtree(id, budget.clamp(100, 30_000), by_alloc)))?
 }
 
+/// `older_than_days > 0` — только файлы, которые не менялись дольше указанного срока.
 #[tauri::command(async)]
-fn top_files(state: State<AppState>, root: String, id: u32, limit: usize, by_alloc: bool) -> Result<Vec<tree::FileDto>, String> {
-    with_tree(&state, &root, |t| check_id(t, id).map(|_| t.top_files(id, limit.clamp(1, 2000), by_alloc)))?
+fn top_files(state: State<AppState>, root: String, id: u32, limit: usize, by_alloc: bool, older_than_days: Option<u32>) -> Result<Vec<tree::FileDto>, String> {
+    let cutoff = match older_than_days.unwrap_or(0) {
+        0 => 0,
+        d => winutil::now_unix() - d as i64 * 86400,
+    };
+    with_tree(&state, &root, |t| check_id(t, id).map(|_| t.top_files(id, limit.clamp(1, 5000), by_alloc, cutoff)))?
 }
 
 #[tauri::command(async)]
@@ -314,6 +366,140 @@ fn dev_artifacts(state: State<AppState>, root: String) -> Result<Vec<tree::Artif
     with_tree(&state, &root, |t| t.dev_artifacts(20 << 20))
 }
 
+// ───────────── Сравнение сканов ─────────────
+
+#[tauri::command(async)]
+fn snapshots_list(root: String) -> Vec<snapshot::SnapMeta> {
+    snapshot::list(&root)
+}
+
+/// Сравнивает последний снимок корня с выбранным базовым.
+#[tauri::command(async)]
+fn snapshot_diff(root: String, base_id: String, limit: usize) -> Result<snapshot::Diff, String> {
+    let latest = snapshot::list(&root).into_iter().next().ok_or_else(|| tr("Снимков ещё нет", "There are no snapshots yet").to_string())?;
+    let missing = || tr("Снимок не найден", "Snapshot not found").to_string();
+    let new = snapshot::load(&latest.id).ok_or_else(missing)?;
+    let old = snapshot::load(&base_id).ok_or_else(missing)?;
+    Ok(snapshot::diff(&old, &new, limit.clamp(1, 500)))
+}
+
+// ───────────── Игры и программы ─────────────
+
+/// Установленные игры и программы. Размер берётся из сканирования диска, если оно есть,
+/// иначе — из данных магазина или реестра.
+#[tauri::command(async)]
+fn installed_apps(state: State<AppState>) -> Vec<apps::InstalledApp> {
+    let mut list = apps::list();
+    let trees = state.trees.read().unwrap();
+    for a in list.iter_mut() {
+        for t in trees.values() {
+            if let Some(id) = t.find_path(&a.path) {
+                let n = &t.nodes[id as usize];
+                a.size = n.size;
+                a.alloc = n.alloc;
+                a.mtime = n.mtime;
+                a.node = Some(id);
+                a.root = t.root_path.clone();
+                a.path = t.path(id); // написание как на диске
+
+                break;
+            }
+        }
+        if a.node.is_none() {
+            a.size = a.reported_size;
+            a.alloc = a.reported_size;
+        }
+    }
+    list.sort_by(|a, b| b.alloc.cmp(&a.alloc).then_with(|| a.name.cmp(&b.name)));
+    list
+}
+
+// ───────────── Экспорт ─────────────
+
+fn csv_field(s: &str) -> String {
+    if s.contains([';', '"', '\n', '\r']) {
+        format!("\"{}\"", s.replace('"', "\"\""))
+    } else {
+        s.to_string()
+    }
+}
+
+/// Unix-секунды → `ГГГГ-ММ-ДД` (UTC).
+fn iso_date(unix: i64) -> String {
+    if unix <= 0 {
+        return String::new();
+    }
+    let days = unix.div_euclid(86400);
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = yoe + era * 400 + if m <= 2 { 1 } else { 0 };
+    format!("{:04}-{:02}-{:02}", y, m, d)
+}
+
+fn build_csv(tree: &Tree, kind: &str, id: u32, by_alloc: bool, older_than_days: u32) -> Result<String, String> {
+    let mut rows: Vec<Vec<String>> = Vec::new();
+    match kind {
+        "dir" => {
+            rows.push(
+                [tr("Имя", "Name"), tr("Вид", "Kind"), tr("Размер, байт", "Size, bytes"), tr("На диске, байт", "On disk, bytes"), tr("Файлов", "Files"), tr("Изменён", "Modified"), tr("Путь", "Path")]
+                    .map(String::from)
+                    .to_vec(),
+            );
+            let view = tree.dir_view(id, by_alloc);
+            for c in view.children {
+                let path = if view.path.ends_with('\\') { format!("{}{}", view.path, c.name) } else { format!("{}\\{}", view.path, c.name) };
+                rows.push(vec![
+                    c.name,
+                    if c.dir { tr("папка", "folder") } else { tr("файл", "file") }.to_string(),
+                    c.size.to_string(),
+                    c.alloc.to_string(),
+                    c.files.to_string(),
+                    iso_date(c.mtime),
+                    path,
+                ]);
+            }
+        }
+        "top" => {
+            rows.push([tr("Имя", "Name"), tr("Размер, байт", "Size, bytes"), tr("На диске, байт", "On disk, bytes"), tr("Изменён", "Modified"), tr("Путь", "Path")].map(String::from).to_vec());
+            let cutoff = if older_than_days > 0 { winutil::now_unix() - older_than_days as i64 * 86400 } else { 0 };
+            for f in tree.top_files(id, 5000, by_alloc, cutoff) {
+                rows.push(vec![f.name, f.size.to_string(), f.alloc.to_string(), iso_date(f.mtime), f.path]);
+            }
+        }
+        "types" => {
+            rows.push([tr("Расширение", "Extension"), tr("Файлов", "Files"), tr("Размер, байт", "Size, bytes"), tr("На диске, байт", "On disk, bytes")].map(String::from).to_vec());
+            for e in tree.ext_stats(id) {
+                rows.push(vec![e.ext, e.count.to_string(), e.size.to_string(), e.alloc.to_string()]);
+            }
+        }
+        _ => return Err(tr("Неизвестный вид отчёта", "Unknown report kind").into()),
+    }
+    // BOM и «;» — чтобы Excel открыл файл с кириллицей и колонками без настройки.
+    let mut out = String::from("\u{FEFF}");
+    for r in rows {
+        out.push_str(&r.iter().map(|f| csv_field(f)).collect::<Vec<_>>().join(";"));
+        out.push_str("\r\n");
+    }
+    Ok(out)
+}
+
+/// Сохраняет отчёт в CSV через системный диалог. Возвращает путь или None, если диалог закрыли.
+#[tauri::command(async)]
+fn export_csv(app: AppHandle, state: State<AppState>, root: String, kind: String, id: u32, by_alloc: bool, older_than_days: Option<u32>) -> Result<Option<String>, String> {
+    let csv = with_tree(&state, &root, |t| check_id(t, id).and_then(|_| build_csv(t, &kind, id, by_alloc, older_than_days.unwrap_or(0))))??;
+    let name = format!("space-commander-{}-{}.csv", kind, iso_date(winutil::now_unix()));
+    let Some(target) = app.dialog().file().set_file_name(name).add_filter("CSV", &["csv"]).blocking_save_file() else { return Ok(None) };
+    let path = target.into_path().map_err(|e| e.to_string())?;
+    std::fs::write(&path, csv).map_err(|e| e.to_string())?;
+    Ok(Some(path.to_string_lossy().to_string()))
+}
+
 // ───────────── Удаление ─────────────
 
 #[derive(Serialize, Default)]
@@ -337,7 +523,7 @@ fn delete_nodes(state: State<AppState>, root: String, ids: Vec<u32>, permanent: 
     let mut report = DeleteReport::default();
     for (_, path, _) in &targets {
         if junk::is_protected(std::path::Path::new(path)) {
-            return Err(format!("{} — защищённая системная папка, удаление запрещено", path));
+            return Err(format!("{} — {}", path, tr("защищённая системная папка, удаление запрещено", "a protected system folder, deletion is not allowed")));
         }
     }
     if permanent {
@@ -382,9 +568,10 @@ struct CleanProgress {
     title: String,
 }
 
+/// `skip_running` — не трогать кеши приложений, которые сейчас запущены.
 #[tauri::command(async)]
-fn junk_clean(app: AppHandle, ids: Vec<String>) -> junk::CleanReport {
-    let report = junk::clean(&ids, |index, total, title| {
+fn junk_clean(app: AppHandle, ids: Vec<String>, skip_running: Option<bool>) -> junk::CleanReport {
+    let report = junk::clean(&ids, skip_running.unwrap_or(false), |index, total, title| {
         let _ = app.emit("clean-progress", CleanProgress { index, total, title: title.to_string() });
     });
     schedule::record_history(0);
@@ -405,7 +592,7 @@ fn dupes_start(app: AppHandle, state: State<AppState>, root: String, id: u32, mi
     let progress = {
         let mut slot = state.dupes.lock().unwrap();
         if slot.is_some() {
-            return Err("Поиск дубликатов уже идёт".into());
+            return Err(tr("Поиск дубликатов уже идёт", "A duplicate search is already running").into());
         }
         let p = Arc::new(Progress::default());
         *slot = Some(p.clone());
@@ -496,13 +683,41 @@ pub fn run() {
         let code = args.get(pos + 1).map(|id| schedule::run_headless(id)).unwrap_or(2);
         std::process::exit(code);
     }
+    i18n::set_english(schedule::load_settings().lang == "en");
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .manage(AppState::default())
-        .setup(|_app| {
+        .setup(|app| {
             std::thread::spawn(|| {
                 schedule::register_app_id();
                 schedule::record_history(3600);
+                schedule::refresh_registrations();
+            });
+            // Прошлые результаты сканирования поднимаем из кеша в фоне: окно открывается сразу.
+            let handle = app.handle().clone();
+            std::thread::spawn(move || {
+                let restored = cache::load_all();
+                if restored.is_empty() {
+                    return;
+                }
+                let state = handle.state::<AppState>();
+                let mask = state.hide_mask.load(Relaxed);
+                let mut summaries = Vec::new();
+                {
+                    let mut trees = state.trees.write().unwrap();
+                    for mut t in restored {
+                        let k = key(&t.root_path);
+                        if trees.contains_key(&k) {
+                            continue; // пока читали кеш, диск уже пересканировали
+                        }
+                        // Пересчёт сумм заодно снимает сохранённый фильтр и ставит текущий.
+                        t.apply_filter(mask);
+                        summaries.push(t.summary());
+                        trees.insert(k, t);
+                    }
+                }
+                let _ = handle.emit("scan-restored", summaries);
             });
             Ok(())
         })
@@ -514,9 +729,12 @@ pub fn run() {
             reveal,
             open_path,
             open_settings,
+            set_language,
+            pick_folder,
             start_scan,
             cancel_scan,
             scan_summaries,
+            forget_scan,
             set_visibility,
             get_dir,
             get_subtree,
@@ -527,6 +745,10 @@ pub fn run() {
             parent_of,
             denied_paths,
             dev_artifacts,
+            snapshots_list,
+            snapshot_diff,
+            installed_apps,
+            export_csv,
             delete_nodes,
             junk_scan,
             junk_clean,
@@ -543,5 +765,28 @@ pub fn run() {
         .expect("не удалось запустить приложение");
 }
 
-#[allow(dead_code)]
-const _: u16 = F_DELETED;
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn csv_is_excel_friendly() {
+        let t = tree::tests::build("C:\\", &[(0, "Отчёт; итог.xlsx", false, 1500), (0, "папка \"A\"", true, 0), (2, "x.bin", false, 10)]);
+        let csv = build_csv(&t, "dir", 0, true, 0).unwrap();
+        assert!(csv.starts_with('\u{FEFF}'));
+        let lines: Vec<&str> = csv.trim_start_matches('\u{FEFF}').lines().collect();
+        assert_eq!(lines.len(), 3);
+        assert!(lines[1].starts_with("\"Отчёт; итог.xlsx\";файл;1500;1500;1;"));
+        assert!(lines[2].contains("\"папка \"\"A\"\"\";папка;10"));
+        assert!(build_csv(&t, "types", 0, true, 0).unwrap().contains("xlsx;1;1500;1500"));
+        assert!(build_csv(&t, "nope", 0, true, 0).is_err());
+    }
+
+    #[test]
+    fn dates() {
+        assert_eq!(iso_date(0), "");
+        assert_eq!(iso_date(86400), "1970-01-02");
+        assert_eq!(iso_date(1_700_000_000), "2023-11-14");
+        assert_eq!(iso_date(951_782_400), "2000-02-29");
+    }
+}
