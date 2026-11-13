@@ -11,6 +11,10 @@ Built with Rust and Tauri 2. The installer is about 2.5 MB.
 
 English · [Русский](docs/README.ru.md)
 
+## Download
+
+Get the installer from the [latest release](https://github.com/legostin/space-commander/releases/latest). It installs for the current user without administrator rights. The installer is not code-signed, so Windows SmartScreen will warn about it: choose *More info → Run anyway*.
+
 ![Overview](docs/media/overview.png)
 
 ## What it does
