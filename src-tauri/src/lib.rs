@@ -4,6 +4,7 @@ pub mod categories;
 pub mod dupes;
 pub mod i18n;
 pub mod junk;
+pub mod junk_en;
 pub mod scan_mft;
 pub mod scan_walk;
 pub mod schedule;

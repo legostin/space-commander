@@ -5,6 +5,7 @@
 //! `\\.\C:`, а его Windows выдаёт только администраторам. Том открывается только
 //! на чтение.
 
+use crate::i18n::tr;
 use crate::scan_walk::Progress;
 use crate::tree::*;
 use crate::winutil::{self, filetime_to_unix, wide};
@@ -72,7 +73,7 @@ fn read_at(h: &Handle, offset: u64, buf: &mut [u8]) -> Result<(), String> {
         let want = (buf.len() - done).min(64 << 20) as u32;
         let ok = unsafe { ReadFile(h.0, buf[done..].as_mut_ptr(), want, &mut read, &mut ov) };
         if ok == 0 || read == 0 {
-            return Err(format!("Ошибка чтения тома (код {})", unsafe { GetLastError() }));
+            return Err(format!("{} ({})", tr("Ошибка чтения тома", "Volume read error"), unsafe { GetLastError() }));
         }
         done += read as usize;
     }
@@ -103,7 +104,7 @@ fn volume_data(h: &Handle) -> Result<Volume, String> {
         )
     };
     if ok == 0 || ret < 96 {
-        return Err("Том не является NTFS".into());
+        return Err(tr("Том не является NTFS", "The volume is not NTFS").into());
     }
     let v = Volume {
         total_bytes: u64_at(&buf, 16) * u32_at(&buf, 44) as u64,
@@ -113,7 +114,7 @@ fn volume_data(h: &Handle) -> Result<Volume, String> {
         mft_start_lcn: u64_at(&buf, 64),
     };
     if v.bytes_per_cluster == 0 || v.record_size < 512 || v.record_size > 65536 || !v.record_size.is_power_of_two() {
-        return Err("Неожиданная геометрия NTFS".into());
+        return Err(tr("Неожиданная геометрия NTFS", "Unexpected NTFS geometry").into());
     }
     Ok(v)
 }
@@ -248,7 +249,7 @@ fn extents_via_record0(h: &Handle, v: &Volume) -> Result<Extents, String> {
     read_at(h, v.mft_start_lcn * v.bytes_per_cluster, &mut rec)?;
     rec.truncate(v.record_size);
     if !apply_fixup(&mut rec) {
-        return Err("Запись $MFT повреждена".into());
+        return Err(tr("Запись $MFT повреждена", "The $MFT record is damaged").into());
     }
     let used = (u32_at(&rec, 24) as usize).min(rec.len());
     let mut off = u16_at(&rec, 20) as usize;
@@ -264,11 +265,11 @@ fn extents_via_record0(h: &Handle, v: &Volume) -> Result<Extents, String> {
         if ty == 0x80 && rec[off + 8] != 0 && rec[off + 9] == 0 && off + 64 <= used {
             let run_off = u16_at(&rec, off + 32) as usize;
             return decode_runs(&rec, off + run_off, off + len, v.bytes_per_cluster)
-                .ok_or_else(|| "Не удалось разобрать размещение $MFT".to_string());
+                .ok_or_else(|| tr("Не удалось разобрать размещение $MFT", "Could not parse the $MFT layout").to_string());
         }
         off += len;
     }
-    Err("В записи $MFT нет атрибута данных".into())
+    Err(tr("В записи $MFT нет атрибута данных", "The $MFT record has no data attribute").into())
 }
 
 struct RawRec {
@@ -449,8 +450,8 @@ pub fn scan(letter: char, progress: &Progress) -> Result<Tree, String> {
     let started = Instant::now();
     let letter = letter.to_ascii_uppercase();
     let vol = open(&format!(r"\\.\{}:", letter), GENERIC_READ).map_err(|code| match code {
-        5 => "Нет доступа к тому: быстрый режим требует прав администратора".to_string(),
-        c => format!("Не удалось открыть том {}: (код {})", letter, c),
+        5 => tr("Нет доступа к тому: быстрый режим требует прав администратора", "No access to the volume: fast mode needs administrator rights").to_string(),
+        c => format!("{} {}: ({})", tr("Не удалось открыть том", "Could not open volume"), letter, c),
     })?;
     let v = volume_data(&vol)?;
     let bpc = v.bytes_per_cluster;
@@ -464,7 +465,7 @@ pub fn scan(letter: char, progress: &Progress) -> Result<Tree, String> {
         // Часть карты размещения лежит в дополнительных записях — пробуем запасной способ целиком.
         let alt = extents_via_record0(&vol, &v)?;
         if alt.iter().map(|e| e.1).sum::<u64>() < v.mft_valid_len {
-            return Err("Таблица файлов слишком фрагментирована для быстрого чтения".into());
+            return Err(tr("Таблица файлов слишком фрагментирована для быстрого чтения", "The file table is too fragmented for fast reading").into());
         }
         extents = alt;
     }
@@ -564,7 +565,7 @@ pub fn scan(letter: char, progress: &Progress) -> Result<Tree, String> {
             progress.dirs.fetch_add(n_dirs, Relaxed);
             progress.bytes.fetch_add(n_bytes, Relaxed);
         }
-        reader.join().unwrap_or_else(|_| Err("Сбой потока чтения".into()))
+        reader.join().unwrap_or_else(|_| Err(tr("Сбой потока чтения", "The reader thread failed").into()))
     });
     read_result?;
     drop(vol);
@@ -591,7 +592,7 @@ pub fn scan(letter: char, progress: &Progress) -> Result<Tree, String> {
     drop(ext_names);
 
     if entries.len() <= ROOT_RECORD as usize || !entries[ROOT_RECORD as usize].used {
-        return Err("В таблице файлов нет корневого каталога".into());
+        return Err(tr("В таблице файлов нет корневого каталога", "The file table has no root directory").into());
     }
 
     // Группируем записи по родителю (сортировка подсчётом), затем раскладываем в ширину:

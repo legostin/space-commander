@@ -141,10 +141,11 @@ const junk = [
   targets: path ? [{ path, size, files }, ...(id === "shader-cache" ? [{ path: "C:\\Users\\commander\\AppData\\Local\\D3DSCache", size: 12 * MB, files: 218 }] : [])] : [],
   hint: id === "hiberfil" ? "Отключается командой powercfg /h off в терминале администратора. Пропадут гибернация и быстрый запуск." : id === "docker-wsl" ? "Сначала docker system prune -a, затем wsl --shutdown и сжатие диска: Optimize-VHD или diskpart → compact vdisk." : "",
   action: "",
+  running: id === "chromium:google\\chrome" || id === "chromium:claude",
 }));
 
 let tasks: any[] = [
-  { id: "task-demo", name: "Еженедельная уборка", kind: "weekly", time: "03:00", weekday: 7, monthday: 1, rules: ["user-temp", "shader-cache", "npm-cache", "chromium:google\\chrome"], notify: true, low_space_pct: 10, elevated: false, enabled: true, registered: true },
+  { id: "task-demo", name: "Еженедельная уборка", kind: "weekly", time: "03:00", weekday: 7, monthday: 1, rules: ["user-temp", "shader-cache", "npm-cache", "chromium:google\\chrome"], notify: true, low_space_pct: 10, elevated: false, enabled: true, registered: true, only_below_pct: 0, watch_growth_gb: 10, exe: "" },
 ];
 
 const history = Array.from({ length: 60 }, (_, i) => ({
@@ -221,7 +222,52 @@ export async function mockCall<T>(cmd: string, a: Record<string, any>): Promise<
         return { node: { ...dto(n), name: a.id === 0 ? "C:\\" : n.name }, path: pathOf(a.id), crumbs, children: n.children.map((c) => dto(nodes[c])).sort((x, y) => y.size - x.size) };
       }
       case "get_subtree": return subtree(a.id, a.budget);
-      case "top_files": return nodes.filter((n) => !n.dir && alive(n.id)).sort((x, y) => y.size - x.size).slice(0, a.limit).map(fileDto);
+      case "top_files":
+        return nodes
+          .filter((n) => !n.dir && alive(n.id) && (!a.olderThanDays || n.mtime < now - a.olderThanDays * 86400))
+          .sort((x, y) => y.size - x.size)
+          .slice(0, a.limit)
+          .map(fileDto);
+      case "pick_folder": return null;
+      case "export_csv": return "C:\\Users\\commander\\Documents\\space-commander-report.csv";
+      case "snapshots_list": {
+        const meta = (i: number, mode: string, alloc: number) => ({ id: `C___${i}`, root: "C:\\", mode, taken_at: now - i * 86400 * 4, alloc, files: 1928468 - i * 4100 });
+        return scanned ? [meta(0, "walk", nodes[0].size), meta(1, "walk", nodes[0].size - 23 * GB), meta(3, "mft", nodes[0].size - 41 * GB), meta(7, "walk", nodes[0].size - 58 * GB)] : [];
+      }
+      case "snapshot_diff": {
+        const item = (path: string, dir: boolean, old: number, nw: number, extra = {}) => ({ path, dir, old: old * GB, new: nw * GB, delta: (nw - old) * GB, is_new: false, gone: false, ...extra });
+        const items = [
+          item("C:\\Users\\commander\\AppData\\Local\\NVIDIA\\DXCache", true, 14.2, 26.1),
+          item("C:\\Users\\commander\\AppData\\Local\\wsl\\{2e5d6add}\\ext4.vhdx", false, 36.5, 43.7),
+          item("C:\\Program Files (x86)\\Steam\\steamapps\\common\\Hollow Forge", true, 0, 6.1, { is_new: true }),
+          item("C:\\Users\\commander\\Videos\\Записи", true, 8.3, 12.9),
+          item("C:\\Users\\commander\\Downloads", true, 41.0, 37.6),
+          item("C:\\Users\\commander\\source\\engine\\target", true, 6.4, 9.8),
+          item("C:\\Program Files (x86)\\Steam\\steamapps\\common\\Old Racer", true, 5.2, 0, { gone: true }),
+          item("C:\\Users\\commander\\.ollama\\models", true, 16.1, 18.0),
+        ].sort((x, y) => Math.abs(y.delta) - Math.abs(x.delta));
+        const snaps = [0, 1, 3, 7].map((i) => ({ id: `C___${i}`, root: "C:\\", mode: i === 3 ? "mft" : "walk", taken_at: now - i * 86400 * 4, alloc: nodes[0].size, files: 1928468 }));
+        const base = snaps.find((x) => x.id === a.baseId) ?? snaps[1];
+        return { base, current: snaps[0], delta: 23 * GB, delta_files: 4100, mixed_modes: base.mode !== "walk", items: items.slice(0, a.limit) };
+      }
+      case "installed_apps": {
+        const app = (name: string, source: string, path: string, gb: number, played: number, publisher = "") => ({
+          name, source, path, publisher, reported_size: gb * GB, last_played: played ? now - played * 86400 : 0,
+          uninstall: source === "steam" ? "steam://uninstall/1" : "", size: gb * GB, alloc: gb * GB, mtime: now - (played || 200) * 86400, node: scanned ? 1 : null, root: "C:\\",
+        });
+        return [
+          app("Rally Legends", "steam", "C:\\Program Files (x86)\\Steam\\steamapps\\common\\Rally Legends", 140, 2),
+          app("Cyber Odyssey", "steam", "C:\\Program Files (x86)\\Steam\\steamapps\\common\\Cyber Odyssey", 120, 410),
+          app("METAPHOR", "steam", "C:\\Program Files (x86)\\Steam\\steamapps\\common\\METAPHOR", 96, 35),
+          app("Starfield Tactics", "steam", "C:\\Program Files (x86)\\Steam\\steamapps\\common\\Starfield Tactics", 88, 0),
+          app("DEATHLOOP", "epic", "C:\\Program Files\\Epic Games\\DEATHLOOP", 31, 0),
+          app("No Man's Sky", "gog", "C:\\GOG Games\\No Man's Sky", 24.9, 0),
+          app("Unreal Engine", "epic", "C:\\Program Files\\Epic Games\\UE_5.7", 66, 0),
+          app("Microsoft Visual Studio 2026", "program", "C:\\Program Files\\Microsoft Visual Studio\\2026", 28.4, 0, "Microsoft Corporation"),
+          app("Blender", "program", "C:\\Program Files\\Blender Foundation\\Blender 4.5", 1.3, 0, "Blender Foundation"),
+          app("Git", "program", "C:\\Program Files\\Git", 0.34, 0, "The Git Development Community"),
+        ];
+      }
       case "ext_stats": {
         const m = new Map<string, any>();
         for (const n of nodes) {
@@ -256,7 +302,8 @@ export async function mockCall<T>(cmd: string, a: Record<string, any>): Promise<
         const items = junk.filter((j) => (a.ids as string[]).includes(j.id as string));
         const freed = items.reduce((s, j) => s + (j.size as number), 0);
         items.forEach((j) => { (j as any).size = 0; (j as any).files = 0; });
-        return { freed, files: 1234, failed: 3, errors: ["C:\\Users\\commander\\AppData\\Local\\Temp\\~DF1.TMP — файл занят другим процессом"], items: [] };
+        const skipped = a.skipRunning ? items.filter((j) => (j as any).running).map((j) => j.title as string) : [];
+        return { freed, files: 1234, failed: 3, errors: ["C:\\Users\\commander\\AppData\\Local\\Temp\\~DF1.TMP — файл занят другим процессом"], items: [], skipped };
       }
       case "dupes_start": {
         let t = 0;

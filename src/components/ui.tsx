@@ -1,6 +1,7 @@
 import { ReactNode, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { CircleAlert, CircleCheck, Info, X } from "lucide-react";
 import { splitBytes } from "../format";
+import { t } from "../i18n";
 import { useStore } from "../store";
 
 /** Кольцевая диаграмма заполнения диска. */
@@ -20,7 +21,7 @@ export function Ring({ value, size = 132, stroke = 11, children, tone }: { value
             <stop offset="1" stopColor={stops[1]} />
           </linearGradient>
         </defs>
-        <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="rgba(255,255,255,.07)" strokeWidth={stroke} />
+        <circle cx={size / 2} cy={size / 2} r={r} fill="none" style={{ stroke: "rgba(var(--tint), .08)" }} strokeWidth={stroke} />
         <circle
           cx={size / 2}
           cy={size / 2}
@@ -69,7 +70,7 @@ export function Modal({ title, onClose, children, footer, wide }: { title: React
       <div className={`modal ${wide ? "wide" : ""}`} role="dialog" aria-modal="true">
         <div className="modal-head">
           <h2>{title}</h2>
-          <button className="icon-btn" onClick={onClose} aria-label="Закрыть">
+          <button className="icon-btn" onClick={onClose} aria-label={t("Закрыть")}>
             <X size={16} />
           </button>
         </div>
@@ -88,7 +89,7 @@ export function Confirm({ title, text, confirmLabel, danger, onConfirm, onClose,
       footer={
         <>
           <button className="btn ghost" onClick={onClose}>
-            Отмена
+            {t("Отмена")}
           </button>
           <button
             className={`btn ${danger ? "danger" : "primary"}`}

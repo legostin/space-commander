@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
-import { AppWindow, ChevronRight, CodeXml, Download, ExternalLink, FolderOpen, Globe, HardDrive, Hammer, Info, Lock, RefreshCw, Sparkles, TriangleAlert } from "lucide-react";
+import { AppWindow, ChevronRight, CodeXml, Download, ExternalLink, FolderOpen, Globe, HardDrive, Hammer, Info, Lock, Play, RefreshCw, Sparkles, TriangleAlert } from "lucide-react";
 import { Artifact, call, CleanReport, JunkItem, listen } from "../api";
 import { fmtAgo, fmtBytes, fmtCount, fmtNum, plural } from "../format";
+import { t } from "../i18n";
 import { useStore } from "../store";
-import { Check, Empty, Modal, Size, Spinner } from "../components/ui";
+import { Check, Empty, Modal, Size, Spinner, Toggle } from "../components/ui";
 
 const SECTIONS: { id: string; title: string; icon: React.ReactNode; hint: string }[] = [
   { id: "system", title: "Система", icon: <HardDrive size={16} />, hint: "Временные файлы, обновления, дампы, эскизы" },
@@ -13,22 +14,30 @@ const SECTIONS: { id: string; title: string; icon: React.ReactNode; hint: string
   { id: "downloads", title: "Загрузки", icon: <Download size={16} />, hint: "Давно скачанные установщики" },
 ];
 
+/** Подпись кнопки для штатного средства Windows, на которое ссылается справочная карточка. */
+function actionLabel(action: string): string {
+  if (action === "tool:system-protection") return t("Открыть «Защиту системы»");
+  if (action === "tool:disk-cleanup") return t("Открыть «Очистку диска»");
+  return t("Открыть Параметры");
+}
+
 function SafetyBadge({ item }: { item: JunkItem }) {
-  if (item.safety === "safe") return <span className="badge safe">Безопасно</span>;
-  if (item.safety === "caution") return <span className="badge caution">С оговорками</span>;
-  return <span className="badge info">Справка</span>;
+  if (item.safety === "safe") return <span className="badge safe">{t("Безопасно")}</span>;
+  if (item.safety === "caution") return <span className="badge caution">{t("С оговорками")}</span>;
+  return <span className="badge info">{t("Справка")}</span>;
 }
 
 function Row({ item, checked, onCheck, locked }: { item: JunkItem; checked: boolean; onCheck: (v: boolean) => void; locked: boolean }) {
   const [open, setOpen] = useState(false);
   const askElevation = useStore((s) => s.askElevation);
   const toast = useStore((s) => s.toast);
-  const reveal = (path: string) => void call("reveal", { path }).catch((e) => toast("error", "Не удалось открыть Проводник", String(e)));
+  const reveal = (path: string) => void call("reveal", { path }).catch((e) => toast("error", t("Не удалось открыть Проводник"), String(e)));
+  const known = item.accessible || item.size > 0;
   return (
     <div className={`junk-row ${open ? "open" : ""}`}>
       <div className="junk-main" onClick={() => setOpen(!open)}>
         {locked ? (
-          <span className="check-lock" title="Нужны права администратора">
+          <span className="check-lock" title={t("Нужны права администратора")}>
             <Lock size={12} />
           </span>
         ) : (
@@ -39,26 +48,40 @@ function Row({ item, checked, onCheck, locked }: { item: JunkItem; checked: bool
           <SafetyBadge item={item} />
           {item.needs_admin && (
             <span className="badge admin">
-              <Lock size={10} /> Администратор
+              <Lock size={10} /> {t("Администратор")}
+            </span>
+          )}
+          {item.running && (
+            <span className="badge running" title={t("Приложение сейчас запущено: часть файлов занята и не удалится")}>
+              <Play size={9} /> {t("Запущено")}
             </span>
           )}
         </div>
-        <span className="junk-files">{item.accessible || item.size > 0 ? `${fmtCount(item.files)} ${plural(item.files, "файл", "файла", "файлов")}` : ""}</span>
-        <span className="junk-size">{item.accessible || item.size > 0 ? <Size bytes={item.size} /> : <span className="dim">размер скрыт</span>}</span>
+        <span className="junk-files">{known ? `${fmtCount(item.files)} ${plural(item.files, "файл", "файла", "файлов")}` : ""}</span>
+        <span className="junk-size">{known ? <Size bytes={item.size} /> : <span className="dim">{t("размер скрыт")}</span>}</span>
         <ChevronRight size={15} className="chev" />
       </div>
       {open && (
         <div className="junk-detail">
           <p>{item.desc}</p>
+          {item.running && (
+            <div className="why warn">
+              <Play size={13} />
+              <div>
+                <b>{t("Приложение запущено")}</b>
+                <span>{t("Занятые файлы будут пропущены, а приложение может повести себя странно до перезапуска. Лучше закрыть его перед очисткой.")}</span>
+              </div>
+            </div>
+          )}
           {item.needs_admin && (
             <div className="why">
               <Lock size={13} />
               <div>
-                <b>Почему нужны права администратора</b>
+                <b>{t("Почему нужны права администратора")}</b>
                 <span>{item.admin_reason}</span>
                 {locked && (
                   <button className="link" onClick={() => askElevation({ reason: "clean", what: item.title })}>
-                    Как получить доступ
+                    {t("Как получить доступ")}
                   </button>
                 )}
               </div>
@@ -66,19 +89,19 @@ function Row({ item, checked, onCheck, locked }: { item: JunkItem; checked: bool
           )}
           {item.targets.length > 0 && (
             <div className="targets">
-              <div className="targets-head">Что именно будет очищено</div>
-              {item.targets.slice(0, 12).map((t) => (
-                <div key={t.path} className="target">
-                  <code className="ellipsis">{t.path}</code>
-                  <Size bytes={t.size} />
-                  {t.path.includes(":\\") && (
-                    <button className="icon-btn sm" title="Показать в Проводнике" onClick={() => reveal(t.path)}>
+              <div className="targets-head">{t("Что именно будет очищено")}</div>
+              {item.targets.slice(0, 12).map((x) => (
+                <div key={x.path} className="target">
+                  <code className="ellipsis">{x.path}</code>
+                  <Size bytes={x.size} />
+                  {x.path.includes(":\\") && (
+                    <button className="icon-btn sm" title={t("Показать в Проводнике")} onClick={() => reveal(x.path)}>
                       <FolderOpen size={13} />
                     </button>
                   )}
                 </div>
               ))}
-              {item.targets.length > 12 && <div className="target more">и ещё {item.targets.length - 12}</div>}
+              {item.targets.length > 12 && <div className="target more">{t("и ещё {0}", item.targets.length - 12)}</div>}
             </div>
           )}
         </div>
@@ -89,11 +112,20 @@ function Row({ item, checked, onCheck, locked }: { item: JunkItem; checked: bool
 
 function InfoCard({ item }: { item: JunkItem }) {
   const toast = useStore((s) => s.toast);
+  const askElevation = useStore((s) => s.askElevation);
+  const elevated = useStore((s) => !!s.priv?.elevated);
+  const known = item.accessible || item.size > 0;
   return (
     <div className="info-card">
       <div className="info-top">
         <b>{item.title}</b>
-        <Size bytes={item.size} />
+        {known ? (
+          <Size bytes={item.size} />
+        ) : (
+          <button className="link" onClick={() => !elevated && askElevation({ reason: "general" })} title={item.admin_reason}>
+            <Lock size={11} /> {t("размер скрыт")}
+          </button>
+        )}
       </div>
       <p>{item.desc}</p>
       {item.hint && (
@@ -105,9 +137,9 @@ function InfoCard({ item }: { item: JunkItem }) {
       <div className="info-foot">
         {item.targets[0] && <code className="ellipsis">{item.targets[0].path}</code>}
         {item.action && (
-          <button className="btn sm" onClick={() => void call("open_settings", { uri: item.action }).catch((e) => toast("error", "Не удалось открыть Параметры", String(e)))}>
+          <button className="btn sm" onClick={() => void call("open_settings", { uri: item.action }).catch((e) => toast("error", t("Не удалось открыть"), String(e)))}>
             <ExternalLink size={12} />
-            Открыть Параметры
+            {actionLabel(item.action)}
           </button>
         )}
       </div>
@@ -141,19 +173,20 @@ function Artifacts({ root }: { root: string }) {
           <Hammer size={16} />
         </span>
         <div>
-          <h3>Папки сборки в проектах</h3>
-          <p>node_modules, target, .venv и подобные — восстанавливаются командой установки или сборки</p>
+          <h3>{t("Папки сборки в проектах")}</h3>
+          <p>{t("node_modules, target, .venv и подобные — восстанавливаются командой установки или сборки")}</p>
         </div>
         <div className="grow" />
         <button className="btn sm ghost" onClick={() => setPicked(new Set(items.filter(stale).map((a) => a.id)))}>
-          Выбрать заброшенные (60+ дней)
+          {t("Выбрать заброшенные (60+ дней)")}
         </button>
         <button
           className="btn sm danger"
           disabled={!pickedItems.length}
           onClick={() => askDelete({ root, items: pickedItems.map((a) => ({ id: a.id, name: a.path, size: a.alloc })), permanent: true })}
         >
-          Удалить{pickedItems.length > 0 && ` · ${fmtBytes(size)}`}
+          {t("Удалить")}
+          {pickedItems.length > 0 && ` · ${fmtBytes(size)}`}
         </button>
       </div>
       <div className="junk-rows">
@@ -174,11 +207,13 @@ function Artifacts({ root }: { root: string }) {
               <div className="junk-title col">
                 <b className="ellipsis">{a.path}</b>
                 <small>
-                  {a.kind} · проект меняли {fmtAgo(a.project_mtime)}
-                  {stale(a) && <em className="tone-warn"> · заброшен</em>}
+                  {a.kind} · {t("проект меняли {0}", fmtAgo(a.project_mtime))}
+                  {stale(a) && <em className="tone-warn"> · {t("заброшен")}</em>}
                 </small>
               </div>
-              <span className="junk-files">{fmtCount(a.files)} файлов</span>
+              <span className="junk-files">
+                {fmtCount(a.files)} {t("файлов")}
+              </span>
               <span className="junk-size">
                 <Size bytes={a.alloc} />
               </span>
@@ -202,6 +237,7 @@ export function Cleanup() {
   const toast = useStore((s) => s.toast);
   const [picked, setPicked] = useState<Set<string> | null>(null);
   const [confirm, setConfirm] = useState(false);
+  const [skipRunning, setSkipRunning] = useState(true);
   const [cleaning, setCleaning] = useState<{ index: number; total: number; title: string } | null>(null);
   const [report, setReport] = useState<CleanReport | null>(null);
 
@@ -222,7 +258,10 @@ export function Cleanup() {
   const items = junk ?? [];
   const sel = picked ?? new Set<string>();
   const chosen = items.filter((j) => sel.has(j.id) && j.safety !== "info" && !isLocked(j));
+  const running = chosen.filter((j) => j.running);
+  const effective = skipRunning ? chosen.filter((j) => !j.running) : chosen;
   const chosenSize = chosen.reduce((s, j) => s + j.size, 0);
+  const effectiveSize = effective.reduce((s, j) => s + j.size, 0);
   const cautionChosen = chosen.filter((j) => j.safety === "caution");
   const lockedItems = items.filter((j) => j.safety !== "info" && isLocked(j));
   const info = items.filter((j) => j.safety === "info");
@@ -240,36 +279,40 @@ export function Cleanup() {
     setConfirm(false);
     setCleaning({ index: 0, total: chosen.length, title: "" });
     try {
-      const r = await call<CleanReport>("junk_clean", { ids: chosen.map((j) => j.id) });
+      const r = await call<CleanReport>("junk_clean", { ids: chosen.map((j) => j.id), skipRunning });
       setReport(r);
       setPicked(null);
       await loadJunk();
       void refreshDrives();
     } catch (e) {
-      toast("error", "Очистка не выполнена", String(e));
+      toast("error", t("Очистка не выполнена"), String(e));
     } finally {
       setCleaning(null);
     }
   };
 
-  const groups = useMemo(() => SECTIONS.map((s) => ({ ...s, rows: items.filter((j) => j.category === s.id && j.safety !== "info").sort((a, b) => b.size - a.size) })).filter((g) => g.rows.length), [junk]);
+  const groups = useMemo(
+    () => SECTIONS.map((s) => ({ ...s, rows: items.filter((j) => j.category === s.id && j.safety !== "info").sort((a, b) => b.size - a.size) })).filter((g) => g.rows.length),
+    [junk],
+  );
+  const points = (n: number) => `${n} ${plural(n, "пункт", "пункта", "пунктов")}`;
 
   return (
     <div className="page">
       <div className="page-head">
         <div>
-          <h1>Очистка</h1>
-          <p>Кеши, временные файлы и всё, что можно удалить без последствий</p>
+          <h1>{t("Очистка")}</h1>
+          <p>{t("Кеши, временные файлы и всё, что можно удалить без последствий")}</p>
         </div>
         <button className="btn" disabled={loading || !!cleaning} onClick={() => void loadJunk().then(() => setPicked(null))}>
           {loading ? <Spinner size={13} /> : <RefreshCw size={14} />}
-          Проверить заново
+          {t("Проверить заново")}
         </button>
       </div>
 
       {!junk ? (
         <div className="card center-row pad">
-          <Spinner /> Ищу кеши и временные файлы…
+          <Spinner /> {t("Ищу кеши и временные файлы…")}
         </div>
       ) : (
         <>
@@ -277,24 +320,29 @@ export function Cleanup() {
             <div className="clean-hero-num">
               <Size bytes={chosenSize} />
               <span>
-                выбрано · {chosen.length} {plural(chosen.length, "пункт", "пункта", "пунктов")}
+                {t("выбрано")} · {points(chosen.length)}
               </span>
             </div>
             <div className="clean-hero-notes">
               {cautionChosen.length > 0 && (
                 <div className="tone-warn">
-                  <TriangleAlert size={13} /> Среди выбранного {cautionChosen.length} {plural(cautionChosen.length, "пункт", "пункта", "пунктов")} с оговорками — раскройте строки, чтобы прочитать
+                  <TriangleAlert size={13} /> {t("Среди выбранного {0} с оговорками — раскройте строки, чтобы прочитать", points(cautionChosen.length))}
+                </div>
+              )}
+              {running.length > 0 && (
+                <div className="tone-warn">
+                  <Play size={12} /> {t("Запущено: {0}", running.map((j) => j.title).join(", "))}
                 </div>
               )}
               {lockedItems.length > 0 && (
                 <button className="link" onClick={() => askElevation({ reason: "clean", what: lockedItems.map((j) => j.title.toLowerCase()).join(", ") })}>
-                  <Lock size={12} /> Ещё {lockedItems.length} {plural(lockedItems.length, "пункт требует", "пункта требуют", "пунктов требуют")} прав администратора — почему?
+                  <Lock size={12} /> {t("Ещё {0} — нужны права администратора. Почему?", points(lockedItems.length))}
                 </button>
               )}
             </div>
             <button className="btn primary lg" disabled={!chosen.length || !!cleaning} onClick={() => setConfirm(true)}>
               {cleaning ? <Spinner /> : <Sparkles size={16} />}
-              {cleaning ? `Очищаю: ${cleaning.title || "…"}` : "Очистить выбранное"}
+              {cleaning ? t("Очищаю: {0}", cleaning.title || "…") : t("Очистить выбранное")}
             </button>
           </div>
 
@@ -308,8 +356,8 @@ export function Cleanup() {
                   <Check checked={on > 0 && on === selectable.length} partial={on > 0 && on < selectable.length} disabled={!selectable.length} onChange={(v) => selectable.forEach((j) => toggle(j.id, v))} />
                   <span className="sec-icon">{g.icon}</span>
                   <div>
-                    <h3>{g.title}</h3>
-                    <p>{g.hint}</p>
+                    <h3>{t(g.title)}</h3>
+                    <p>{t(g.hint)}</p>
                   </div>
                   <div className="grow" />
                   <Size bytes={total} className="sec-size" />
@@ -327,7 +375,7 @@ export function Cleanup() {
             <Artifacts root={scannedRoot} />
           ) : (
             <div className="hint-card">
-              <Hammer size={15} /> После сканирования диска здесь появятся папки сборки в заброшенных проектах (node_modules, target, .venv).
+              <Hammer size={15} /> {t("После сканирования диска здесь появятся папки сборки в заброшенных проектах (node_modules, target, .venv).")}
             </div>
           )}
 
@@ -338,8 +386,8 @@ export function Cleanup() {
                   <Info size={16} />
                 </span>
                 <div>
-                  <h3>Системные гиганты</h3>
-                  <p>Отсюда не удаляются — но вот что это и как уменьшить штатными средствами</p>
+                  <h3>{t("Системные гиганты")}</h3>
+                  <p>{t("Отсюда не удаляются — но вот что это и как уменьшить штатными средствами")}</p>
                 </div>
               </div>
               <div className="info-grid">
@@ -350,62 +398,77 @@ export function Cleanup() {
             </section>
           )}
 
-          {groups.length === 0 && <Empty icon={<Sparkles size={30} />} title="Чисто" text="Кешей и временных файлов не найдено." />}
+          {groups.length === 0 && <Empty icon={<Sparkles size={30} />} title={t("Чисто")} text={t("Кешей и временных файлов не найдено.")} />}
         </>
       )}
 
       {confirm && (
         <Modal
-          title="Очистить выбранное?"
+          title={t("Очистить выбранное?")}
           onClose={() => setConfirm(false)}
           footer={
             <>
               <button className="btn ghost" onClick={() => setConfirm(false)}>
-                Отмена
+                {t("Отмена")}
               </button>
-              <button className="btn primary" autoFocus onClick={() => void run()}>
-                Очистить {fmtBytes(chosenSize)}
+              <button className="btn primary" autoFocus disabled={!effective.length} onClick={() => void run()}>
+                {t("Очистить {0}", fmtBytes(effectiveSize))}
               </button>
             </>
           }
         >
-          <p className="lead">Файлы удаляются сразу, мимо Корзины. Занятые другими программами файлы будут пропущены.</p>
+          <p className="lead">{t("Файлы удаляются сразу, мимо Корзины. Занятые другими программами файлы будут пропущены.")}</p>
+          {running.length > 0 && (
+            <label className="switch-row boxed">
+              <Toggle checked={skipRunning} onChange={setSkipRunning} />
+              <span>
+                {t("Не трогать запущенные приложения")} <small>{running.map((j) => j.title).join(", ")}</small>
+              </span>
+            </label>
+          )}
           <ul className="path-list">
-            {chosen.map((j) => (
-              <li key={j.id}>
-                <span>
-                  {j.title}
-                  {j.safety === "caution" && <em className="tone-warn"> · с оговорками</em>}
-                </span>
-                <b>{fmtBytes(j.size)}</b>
-              </li>
-            ))}
+            {chosen.map((j) => {
+              const skipped = skipRunning && j.running;
+              return (
+                <li key={j.id} className={skipped ? "skipped" : ""}>
+                  <span>
+                    {j.title}
+                    {j.safety === "caution" && <em className="tone-warn"> · {t("с оговорками")}</em>}
+                    {skipped && <em> · {t("запущено, пропускаю")}</em>}
+                  </span>
+                  <b>{fmtBytes(j.size)}</b>
+                </li>
+              );
+            })}
           </ul>
         </Modal>
       )}
 
       {report && (
         <Modal
-          title="Готово"
+          title={t("Готово")}
           onClose={() => setReport(null)}
           footer={
             <button className="btn primary" autoFocus onClick={() => setReport(null)}>
-              Отлично
+              {t("Отлично")}
             </button>
           }
         >
           <div className="report-hero">
             <Size bytes={report.freed} />
-            <span>освобождено · удалено файлов: {fmtNum(report.files)}</span>
+            <span>
+              {t("освобождено")} · {t("удалено файлов: {0}", fmtNum(report.files))}
+            </span>
           </div>
+          {report.skipped.length > 0 && <div className="note">{t("Пропущены запущенные приложения: {0}. Закройте их и повторите, если нужно.", report.skipped.join(", "))}</div>}
           {report.failed > 0 && (
             <div className="note">
-              Пропущено {fmtNum(report.failed)} {plural(report.failed, "файл", "файла", "файлов")} — чаще всего они заняты запущенными программами. Закройте программы и повторите, если нужно.
+              {t("Пропущено {0} — чаще всего они заняты запущенными программами. Закройте программы и повторите, если нужно.", `${fmtNum(report.failed)} ${plural(report.failed, "файл", "файла", "файлов")}`)}
             </div>
           )}
           {report.errors.length > 0 && (
             <details className="errors">
-              <summary>Подробности ({report.errors.length})</summary>
+              <summary>{t("Подробности ({0})", report.errors.length)}</summary>
               {report.errors.map((e, i) => (
                 <code key={i}>{e}</code>
               ))}

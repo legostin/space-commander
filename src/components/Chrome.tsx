@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from "react";
-import { CalendarClock, ChartColumn, Eye, EyeOff, File, Folder, LayoutDashboard, LayoutGrid, Minus, Search, ShieldCheck, Sparkles, Square, User, X, Zap } from "lucide-react";
+import { CalendarClock, ChartColumn, Eye, EyeOff, File, Folder, LayoutDashboard, LayoutGrid, Minus, Search, Settings, ShieldCheck, Sparkles, Square, User, X, Zap } from "lucide-react";
 import { call, FileDto, windowAction } from "../api";
-import { catOf, fmtBytes, fmtCount, fmtDuration, fmtNum, fmtPct } from "../format";
-import { reclaimable, useStore, View } from "../store";
+import { catOf, fmtAgo, fmtBytes, fmtCount, fmtDuration, fmtNum, fmtPct } from "../format";
+import { t } from "../i18n";
+import { isDriveRoot, reclaimable, useStore, View } from "../store";
 import { Bar, Size, Spinner } from "./ui";
 
 export function Logo({ size = 22 }: { size?: number }) {
@@ -18,7 +19,7 @@ export function Logo({ size = 22 }: { size?: number }) {
           <stop offset="1" stopColor="#a78bfa" />
         </linearGradient>
       </defs>
-      <circle cx="32" cy="32" r="25" fill="none" stroke="rgba(255,255,255,.1)" strokeWidth="7" />
+      <circle cx="32" cy="32" r="25" fill="none" stroke="rgba(128,128,150,.22)" strokeWidth="7" />
       <path d="M32 7 A25 25 0 1 1 10.3 44.5" fill="none" stroke="url(#lg-sun)" strokeWidth="7" strokeLinecap="round" />
       <circle cx="32" cy="32" r="12" fill="none" stroke="url(#lg-sky)" strokeWidth="4.5" strokeDasharray="46 30" strokeLinecap="round" transform="rotate(140 32 32)" />
       <circle cx="32" cy="32" r="4" fill="url(#lg-sun)" />
@@ -58,7 +59,7 @@ function GlobalSearch() {
     }
     setBusy(true);
     let stale = false;
-    const t = window.setTimeout(async () => {
+    const timer = window.setTimeout(async () => {
       try {
         const r = await call<{ total: number; items: FileDto[] }>("search", { root, query: q, limit: 40, byAlloc });
         if (!stale) {
@@ -71,7 +72,7 @@ function GlobalSearch() {
     }, 140);
     return () => {
       stale = true;
-      window.clearTimeout(t);
+      window.clearTimeout(timer);
     };
   }, [q, root, ready, byAlloc]);
 
@@ -89,7 +90,7 @@ function GlobalSearch() {
       <input
         ref={input}
         value={q}
-        placeholder={ready ? "Поиск по именам: отчёт, *.iso, node_modules…" : "Поиск появится после сканирования"}
+        placeholder={ready ? t("Поиск по именам: отчёт, *.iso, node_modules…") : t("Поиск появится после сканирования")}
         disabled={!ready}
         onChange={(e) => setQ(e.target.value)}
         onFocus={() => setFocus(true)}
@@ -107,7 +108,7 @@ function GlobalSearch() {
       {busy ? <Spinner size={13} /> : <kbd>Ctrl K</kbd>}
       {focus && q.trim().length >= 2 && (
         <div className="search-pop">
-          {res && res.items.length === 0 && <div className="search-empty">Ничего не найдено</div>}
+          {res && res.items.length === 0 && <div className="search-empty">{t("Ничего не найдено")}</div>}
           {res?.items.map((f, i) => (
             <button key={f.id} className={`search-row ${i === active ? "active" : ""}`} onMouseEnter={() => setActive(i)} onMouseDown={(e) => e.preventDefault()} onClick={() => void go(f)}>
               {f.dir ? <Folder size={15} className="tone-sun" /> : <File size={15} style={{ color: catOf(f.cat).color }} />}
@@ -118,7 +119,7 @@ function GlobalSearch() {
               <Size bytes={byAlloc ? f.alloc : f.size} />
             </button>
           ))}
-          {res && res.total > res.items.length && <div className="search-more">Показаны {res.items.length} крупнейших из {fmtNum(res.total)}</div>}
+          {res && res.total > res.items.length && <div className="search-more">{t("Показаны {0} крупнейших из {1}", res.items.length, fmtNum(res.total))}</div>}
         </div>
       )}
     </div>
@@ -128,6 +129,7 @@ function GlobalSearch() {
 export function Titlebar() {
   const priv = useStore((s) => s.priv);
   const setView = useStore((s) => s.setView);
+  const openSettings = useStore((s) => s.openSettings);
   return (
     <header className="titlebar" data-tauri-drag-region>
       <div className="brand" data-tauri-drag-region>
@@ -137,19 +139,22 @@ export function Titlebar() {
       <GlobalSearch />
       <div className="titlebar-right" data-tauri-drag-region>
         {priv && (
-          <button className={`chip ${priv.elevated ? "elevated" : ""}`} onClick={() => setView("access")} title="Подробнее о правах доступа">
+          <button className={`chip ${priv.elevated ? "elevated" : ""}`} onClick={() => setView("access")} title={t("Подробнее о правах доступа")}>
             {priv.elevated ? <ShieldCheck size={13} /> : <User size={13} />}
-            {priv.elevated ? "Администратор" : "Обычные права"}
+            {priv.elevated ? t("Администратор") : t("Обычные права")}
           </button>
         )}
+        <button className="icon-btn" onClick={() => openSettings(true)} title={t("Настройки")} aria-label={t("Настройки")}>
+          <Settings size={15} />
+        </button>
         <div className="winbtns">
-          <button onClick={() => void windowAction("minimize")} aria-label="Свернуть">
+          <button onClick={() => void windowAction("minimize")} aria-label={t("Свернуть")}>
             <Minus size={15} />
           </button>
-          <button onClick={() => void windowAction("toggleMaximize")} aria-label="Развернуть">
+          <button onClick={() => void windowAction("toggleMaximize")} aria-label={t("Развернуть")}>
             <Square size={12} />
           </button>
-          <button className="close" onClick={() => void windowAction("close")} aria-label="Закрыть">
+          <button className="close" onClick={() => void windowAction("close")} aria-label={t("Закрыть")}>
             <X size={16} />
           </button>
         </div>
@@ -174,10 +179,12 @@ export function Sidebar() {
   const junk = useStore((s) => s.junk);
   const activeRoot = useStore((s) => s.activeRoot);
   const scans = useStore((s) => s.scans);
+  const scanning = useStore((s) => s.scanning);
   const elevated = useStore((s) => !!s.priv?.elevated);
   const reclaim = reclaimable(junk, elevated).reduce((s, j) => s + j.size, 0);
-  const drive = drives.find((d) => d.root === activeRoot) ?? drives[0];
-  const scan = drive ? scans[drive.root] : undefined;
+  const drive = drives.find((d) => activeRoot && activeRoot.toUpperCase().startsWith(d.root.toUpperCase())) ?? drives[0];
+  const scan = activeRoot ? scans[activeRoot] : undefined;
+  const refreshing = scanning?.quiet ? scanning : null;
 
   return (
     <nav className="sidebar">
@@ -185,7 +192,7 @@ export function Sidebar() {
         {NAV.map((n) => (
           <button key={n.id} className={`nav-item ${view === n.id ? "active" : ""}`} onClick={() => setView(n.id)}>
             {n.icon}
-            <span>{n.label}</span>
+            <span>{t(n.label)}</span>
             {n.id === "cleanup" && reclaim > 100 * 1024 * 1024 && <em>{fmtBytes(reclaim)}</em>}
           </button>
         ))}
@@ -193,18 +200,27 @@ export function Sidebar() {
       {drive && (
         <div className="side-drive">
           <div className="side-drive-top">
-            <b>{drive.label || "Локальный диск"} ({drive.letter}:)</b>
+            <b>
+              {drive.label || t("Локальный диск")} ({drive.letter}:)
+            </b>
             <span>{fmtPct(drive.total - drive.free, drive.total, 0)}</span>
           </div>
           <Bar value={(drive.total - drive.free) / drive.total} thin />
           <div className="side-drive-bottom">
-            Свободно <Size bytes={drive.free} /> из <Size bytes={drive.total} />
+            {t("Свободно")} <Size bytes={drive.free} /> {t("из")} <Size bytes={drive.total} />
           </div>
-          {scan && (
-            <div className="side-scan">
-              {scan.mode === "mft" && <Zap size={11} />}
-              {fmtCount(scan.files)} файлов · {fmtDuration(scan.duration_ms)}
+          {refreshing ? (
+            <div className="side-scan live">
+              <Spinner size={11} />
+              {t("Обновляю данные…")} {refreshing.progress ? fmtCount(refreshing.progress.files) : ""}
             </div>
+          ) : (
+            scan && (
+              <div className="side-scan" title={activeRoot && !isDriveRoot(activeRoot) ? activeRoot : undefined}>
+                {scan.mode === "mft" && <Zap size={11} />}
+                {fmtCount(scan.files)} {t("файлов")} · {fmtAgo(scan.scanned_at)}
+              </div>
+            )
           )}
         </div>
       )}
@@ -218,24 +234,32 @@ export function VisibilityToggles() {
   const showSystem = useStore((s) => s.showSystem);
   const setVisibility = useStore((s) => s.setVisibility);
   return (
-    <div className="vis" role="group" aria-label="Что показывать">
+    <div className="vis" role="group" aria-label={t("Что показывать")}>
       <button
         className={showHidden ? "on" : ""}
         aria-pressed={showHidden}
         onClick={() => void setVisibility(!showHidden, showSystem)}
-        title={showHidden ? "Скрытые файлы и папки показаны (например, AppData, ProgramData). Нажмите, чтобы убрать их из карты и сумм." : "Скрытые файлы и папки убраны из карты и сумм. Нажмите, чтобы показать."}
+        title={
+          showHidden
+            ? t("Скрытые файлы и папки показаны (например, ProgramData). Нажмите, чтобы убрать их из карты и сумм.")
+            : t("Скрытые файлы и папки убраны из карты и сумм. Нажмите, чтобы показать.")
+        }
       >
         {showHidden ? <Eye size={13} /> : <EyeOff size={13} />}
-        Скрытые
+        {t("Скрытые")}
       </button>
       <button
         className={showSystem ? "on" : ""}
         aria-pressed={showSystem}
         onClick={() => void setVisibility(showHidden, !showSystem)}
-        title={showSystem ? "Системные файлы и папки показаны (файл подкачки, гибернация, точки восстановления, служебные файлы NTFS). Нажмите, чтобы убрать их из карты и сумм." : "Системные файлы и папки убраны из карты и сумм. Нажмите, чтобы показать."}
+        title={
+          showSystem
+            ? t("Системные файлы и папки показаны (файл подкачки, гибернация, точки восстановления, служебные файлы NTFS). Нажмите, чтобы убрать их из карты и сумм.")
+            : t("Системные файлы и папки убраны из карты и сумм. Нажмите, чтобы показать.")
+        }
       >
         {showSystem ? <Eye size={13} /> : <EyeOff size={13} />}
-        Системные
+        {t("Системные")}
       </button>
     </div>
   );
@@ -246,16 +270,15 @@ export function ScanOverlay() {
   const cancel = useStore((s) => s.cancelScan);
   const drives = useStore((s) => s.drives);
   const priv = useStore((s) => s.priv);
-  if (!scanning) return null;
+  if (!scanning || scanning.quiet) return null;
   const p = scanning.progress;
   const drive = drives.find((d) => d.root === scanning.root);
   const used = drive ? drive.total - drive.free : 0;
   const mft = p?.mode === "mft";
+  // Для отдельной папки итоговый размер заранее неизвестен — показываем бегущую полосу.
+  const known = mft ? (p?.total ?? 0) > 0 : used > 0;
   let frac = 0;
-  if (p) {
-    if (mft && p.total > 0) frac = p.done / p.total;
-    else if (used > 0) frac = Math.min(0.99, p.bytes / used);
-  }
+  if (p && known) frac = mft ? p.done / p.total : Math.min(0.99, p.bytes / used);
   return (
     <div className="scan-overlay">
       <div className="scan-card">
@@ -265,40 +288,40 @@ export function ScanOverlay() {
           <i />
           <Logo size={44} />
         </div>
-        <div className="scan-title">Сканирую {scanning.root.replace(/\\$/, "")}</div>
+        <div className="scan-title">{t("Сканирую {0}", isDriveRoot(scanning.root) ? scanning.root.replace(/\\$/, "") : (scanning.root.split("\\").pop() ?? scanning.root))}</div>
         <div className={`scan-mode ${mft ? "fast" : ""}`}>
           {mft ? (
             <>
-              <Zap size={12} /> Быстрый режим · чтение таблицы файлов
+              <Zap size={12} /> {t("Быстрый режим · чтение таблицы файлов")}
             </>
           ) : (
-            "Обычный режим · обход папок"
+            t("Обычный режим · обход папок")
           )}
         </div>
         <div className="scan-stats">
           <div>
             <b>{fmtNum(p?.files ?? 0)}</b>
-            <span>файлов</span>
+            <span>{t("файлов")}</span>
           </div>
           <div>
             <b>{fmtNum(p?.dirs ?? 0)}</b>
-            <span>папок</span>
+            <span>{t("папок")}</span>
           </div>
           <div>
             <b>{fmtBytes(p?.bytes ?? 0)}</b>
-            <span>найдено</span>
+            <span>{t("найдено")}</span>
           </div>
           <div>
             <b>{fmtDuration(p?.elapsed_ms ?? 0)}</b>
-            <span>прошло</span>
+            <span>{t("прошло")}</span>
           </div>
         </div>
-        <div className="scan-bar">
-          <div style={{ width: `${frac * 100}%` }} />
+        <div className={`scan-bar ${known ? "" : "indeterminate"}`}>
+          <div style={known ? { width: `${frac * 100}%` } : undefined} />
         </div>
-        {!mft && priv && !priv.elevated && <div className="scan-hint">Первый проход по диску самый долгий: Windows читает каталоги с диска. Повторные сканирования занимают секунды.</div>}
+        {!mft && drive && priv && !priv.elevated && <div className="scan-hint">{t("Первый проход по диску самый долгий: Windows читает каталоги с диска. Повторные сканирования занимают секунды.")}</div>}
         <button className="btn ghost" onClick={cancel}>
-          Отменить
+          {t("Отменить")}
         </button>
       </div>
     </div>

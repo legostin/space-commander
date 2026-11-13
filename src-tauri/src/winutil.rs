@@ -1,5 +1,6 @@
 //! Тонкие обёртки над Win32: строки, диски, права, перезапуск с повышением.
 
+use crate::i18n::tr;
 use serde::Serialize;
 use std::ffi::OsStr;
 use std::os::windows::ffi::OsStrExt;
@@ -195,7 +196,7 @@ pub fn relaunch_elevated(args: &str) -> Result<(), String> {
     if (r as isize) > 32 {
         Ok(())
     } else {
-        Err("Повышение прав отменено или не удалось".to_string())
+        Err(tr("Повышение прав отменено или не удалось", "Elevation was cancelled or failed").to_string())
     }
 }
 
@@ -215,7 +216,7 @@ pub fn shell_open(target: &str) -> Result<(), String> {
     if (r as isize) > 32 {
         Ok(())
     } else {
-        Err(format!("Не удалось открыть: {}", target))
+        Err(format!("{}: {}", tr("Не удалось открыть", "Could not open"), target))
     }
 }
 
@@ -237,9 +238,9 @@ pub fn recycle(paths: &[&str]) -> Result<(), String> {
     op.fFlags = (0x40 | 0x10 | 0x4 | 0x400 | 0x4000) as u16;
     let r = unsafe { SHFileOperationW(&mut op) };
     if r != 0 {
-        Err(format!("Не удалось переместить в Корзину (код 0x{:X})", r))
+        Err(format!("{} (0x{:X})", tr("Не удалось переместить в Корзину", "Could not move to the Recycle Bin"), r))
     } else if op.fAnyOperationsAborted != 0 {
-        Err("Удаление отменено".into())
+        Err(tr("Удаление отменено", "Deletion was cancelled").into())
     } else {
         Ok(())
     }

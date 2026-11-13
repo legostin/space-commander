@@ -3,6 +3,7 @@
 //! Каждое правило — это явный список мест на диске. Удаляется только то, что лежит
 //! внутри этих мест; ссылки и junction-ы не раскрываются; занятые файлы пропускаются.
 
+use crate::i18n::tr;
 use crate::winutil::{self, extended, wild_match};
 use rayon::prelude::*;
 use serde::Serialize;
@@ -349,7 +350,7 @@ fn evaluate(rule: &Rule) -> JunkItem {
         item.size = u.size;
         item.files = u.files;
         if u.size > 0 {
-            item.targets.push(TargetInfo { path: "Корзина на всех дисках".into(), size: u.size, files: u.files });
+            item.targets.push(TargetInfo { path: tr("Корзина на всех дисках", "Recycle Bin on all drives").into(), size: u.size, files: u.files });
         }
         return item;
     }
@@ -492,7 +493,7 @@ fn clean_rule(rule: &Rule) -> DelStats {
             st.files = before.files;
         } else {
             st.failed = 1;
-            st.errors.push(format!("Не удалось очистить корзину (0x{:08X})", hr as u32));
+            st.errors.push(format!("{} (0x{:08X})", tr("Не удалось очистить корзину", "Could not empty the Recycle Bin"), hr as u32));
         }
         return st;
     }
@@ -867,7 +868,15 @@ fn chromium_rules() -> Vec<Rule> {
 pub fn all_rules() -> Vec<Rule> {
     let mut rules = static_rules();
     rules.extend(chromium_rules());
+    if crate::i18n::is_english() {
+        rules.iter_mut().for_each(crate::junk_en::apply);
+    }
     rules
+}
+
+/// Идентификаторы встроенных правил — для проверки полноты перевода.
+pub fn static_rule_ids() -> Vec<String> {
+    static_rules().into_iter().map(|r| r.id).collect()
 }
 
 /// Находит и взвешивает весь мусор. Пустые правила в результат не попадают.
@@ -922,7 +931,7 @@ pub fn clean(ids: &[String], skip_running: bool, mut on_progress: impl FnMut(usi
 pub fn remove_path(path: &str) -> Result<(u64, u64, u64, Vec<String>), String> {
     let p = Path::new(path);
     if is_protected(p) {
-        return Err(format!("{} — защищённая системная папка, удаление запрещено", path));
+        return Err(format!("{} — {}", path, tr("защищённая системная папка, удаление запрещено", "a protected system folder, deletion is not allowed")));
     }
     let ext = PathBuf::from(extended(path));
     let meta = std::fs::symlink_metadata(&ext).map_err(|e| e.to_string())?;

@@ -1,0 +1,44 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - run: npm ci
+
+      - name: Type check and translation coverage
+        run: |
+          npx tsc --noEmit
+          npm run i18n
+
+      - name: Core tests
+        working-directory: src-tauri
+        run: cargo test --lib
+
+      - name: Build installer
+        run: npx tauri build
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: space-commander-setup
+          path: src-tauri/target/release/bundle/nsis/*.exe
+          if-no-files-found: error

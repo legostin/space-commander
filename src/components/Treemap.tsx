@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { SubNode } from "../api";
 import { catOf, fmtBytes, fmtCount, fmtPct, REST_ID } from "../format";
+import { t } from "../i18n";
 import { buildTree, HEADER_H, hitTest, layout, pathOfNode, Rect, TNode } from "../treemap";
 
 interface Props {
@@ -31,7 +32,7 @@ function clip(ctx: CanvasRenderingContext2D, text: string, maxWidth: number): st
 }
 
 function restLabel(n: TNode): string {
-  return `ещё ${fmtCount(Number(n.name) || n.files)} мелких`;
+  return t("ещё {0} мелких", fmtCount(Number(n.name) || n.files));
 }
 
 export function Treemap({ data, rootPath, selected, onSelect, onEnter, onContext }: Props) {
@@ -62,24 +63,25 @@ export function Treemap({ data, rootPath, selected, onSelect, onEnter, onContext
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, dim.w, dim.h);
     ctx.textBaseline = "middle";
+    const light = document.documentElement.dataset.theme === "light";
 
     for (const r of rects) {
       if (!r.leaf) {
         if (r.depth === 0) continue;
-        // Рамка папки: чем глубже, тем светлее подложка.
-        const l = Math.min(26, 11 + r.depth * 3);
-        ctx.fillStyle = `hsl(228 18% ${l}%)`;
+        // Рамка папки: чем глубже, тем заметнее подложка (светлее в тёмной теме, темнее в светлой).
+        const l = light ? Math.max(70, 93 - r.depth * 4) : Math.min(26, 11 + r.depth * 3);
+        ctx.fillStyle = `hsl(228 ${light ? 22 : 18}% ${l}%)`;
         ctx.fillRect(r.x, r.y, r.w, r.h);
         if (r.header) {
           ctx.font = "600 11px 'Segoe UI Variable Text','Segoe UI',sans-serif";
           const size = fmtBytes(r.node.size);
           const sw = ctx.measureText(size).width;
           const name = clip(ctx, r.node.name, r.w - 12 - (r.w > 150 ? sw + 10 : 0));
-          ctx.fillStyle = "rgba(232,235,246,.82)";
+          ctx.fillStyle = light ? "rgba(20,24,40,.86)" : "rgba(232,235,246,.82)";
           ctx.fillText(name, r.x + 6, r.y + HEADER_H / 2 + 0.5);
           if (r.w > 150) {
             ctx.font = "11px 'Segoe UI Variable Text','Segoe UI',sans-serif";
-            ctx.fillStyle = "rgba(232,235,246,.42)";
+            ctx.fillStyle = light ? "rgba(20,24,40,.5)" : "rgba(232,235,246,.42)";
             ctx.fillText(size, r.x + r.w - sw - 6, r.y + HEADER_H / 2 + 0.5);
           }
         }
@@ -203,8 +205,12 @@ export function Treemap({ data, rootPath, selected, onSelect, onEnter, onContext
           </div>
           <div className="tm-tip-row">
             <span className="tm-tip-size">{fmtBytes(hover.node.size)}</span>
-            <span>{fmtPct(hover.node.size, total)} этой папки</span>
-            {hover.node.dir && <span>{fmtCount(hover.node.files)} файлов</span>}
+            <span>{t("{0} этой папки", fmtPct(hover.node.size, total))}</span>
+            {hover.node.dir && (
+              <span>
+                {fmtCount(hover.node.files)} {t("файлов")}
+              </span>
+            )}
             {!hover.node.dir && hover.node.id !== REST_ID && <span>{catOf(hover.node.cat).name}</span>}
           </div>
           <div className="tm-tip-path">{hoverPath}</div>

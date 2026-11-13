@@ -1,5 +1,12 @@
-const UNITS = ["Б", "КБ", "МБ", "ГБ", "ТБ", "ПБ"];
-const nf = new Intl.NumberFormat("ru-RU");
+import { getLang, plural, t } from "./i18n";
+
+export { plural };
+
+const UNITS_RU = ["Б", "КБ", "МБ", "ГБ", "ТБ", "ПБ"];
+const UNITS_EN = ["B", "KB", "MB", "GB", "TB", "PB"];
+const en = () => getLang() === "en";
+const locale = () => (en() ? "en-US" : "ru-RU");
+const dec = (s: string) => (en() ? s : s.replace(".", ","));
 
 /** 1536 → «1,5 КБ». Три значащие цифры, запятая как десятичный разделитель. */
 export function fmtBytes(bytes: number): string {
@@ -8,77 +15,75 @@ export function fmtBytes(bytes: number): string {
 }
 
 export function splitBytes(bytes: number): [string, string] {
-  if (!isFinite(bytes) || bytes <= 0) return ["0", "Б"];
+  const units = en() ? UNITS_EN : UNITS_RU;
+  if (!isFinite(bytes) || bytes <= 0) return ["0", units[0]];
   let v = bytes;
   let i = 0;
-  while (v >= 1024 && i < UNITS.length - 1) {
+  while (v >= 1024 && i < units.length - 1) {
     v /= 1024;
     i++;
   }
   const digits = i === 0 ? 0 : v >= 100 ? 0 : v >= 10 ? 1 : 2;
-  return [v.toFixed(digits).replace(".", ","), UNITS[i]];
+  return [dec(v.toFixed(digits)), units[i]];
+}
+
+/** Изменение размера со знаком: «+6,2 ГБ», «−1,1 ГБ». */
+export function fmtDelta(bytes: number): string {
+  return `${bytes < 0 ? "−" : "+"}${fmtBytes(Math.abs(bytes))}`;
 }
 
 export function fmtNum(n: number): string {
-  return nf.format(Math.round(n));
+  return new Intl.NumberFormat(locale()).format(Math.round(n));
 }
 
 /** Короткое число: 1 928 468 → «1,9 млн». */
 export function fmtCount(n: number): string {
-  if (n >= 1e6) return `${(n / 1e6).toFixed(1).replace(".", ",")} млн`;
-  if (n >= 1e4) return `${Math.round(n / 1e3)} тыс.`;
+  if (n >= 1e6) return `${dec((n / 1e6).toFixed(1))} ${en() ? "M" : "млн"}`;
+  if (n >= 1e4) return `${Math.round(n / 1e3)} ${en() ? "K" : "тыс."}`;
   return fmtNum(n);
 }
 
 export function fmtPct(part: number, total: number, digits = 1): string {
   if (total <= 0) return "0%";
   const p = (part / total) * 100;
-  if (p > 0 && p < 0.1) return "<0,1%";
-  return `${p.toFixed(digits).replace(".", ",")}%`;
+  if (p > 0 && p < 0.1) return `<${dec("0.1")}%`;
+  return `${dec(p.toFixed(digits))}%`;
 }
 
 export function fmtDuration(ms: number): string {
-  if (ms < 1000) return `${Math.round(ms)} мс`;
+  if (ms < 1000) return `${Math.round(ms)} ${t("мс")}`;
   const s = ms / 1000;
-  if (s < 60) return `${s.toFixed(1).replace(".", ",")} с`;
+  if (s < 60) return `${dec(s.toFixed(1))} ${t("с")}`;
   const m = Math.floor(s / 60);
-  return `${m} мин ${Math.round(s - m * 60)} с`;
-}
-
-export function plural(n: number, one: string, few: string, many: string): string {
-  const a = Math.abs(n) % 100;
-  const b = a % 10;
-  if (a > 10 && a < 20) return many;
-  if (b > 1 && b < 5) return few;
-  if (b === 1) return one;
-  return many;
+  return `${m} ${t("мин")} ${Math.round(s - m * 60)} ${t("с")}`;
 }
 
 /** Unix-секунды → «3 дня назад». */
 export function fmtAgo(unix: number): string {
   if (!unix) return "—";
   const s = Math.max(0, Date.now() / 1000 - unix);
-  if (s < 60) return "только что";
+  if (s < 60) return t("только что");
+  const ago = (n: number, one: string, few: string, many: string) => t("{0} назад", `${n} ${plural(n, one, few, many)}`);
   const m = Math.floor(s / 60);
-  if (m < 60) return `${m} ${plural(m, "минуту", "минуты", "минут")} назад`;
+  if (m < 60) return ago(m, "минуту", "минуты", "минут");
   const h = Math.floor(m / 60);
-  if (h < 24) return `${h} ${plural(h, "час", "часа", "часов")} назад`;
+  if (h < 24) return ago(h, "час", "часа", "часов");
   const d = Math.floor(h / 24);
-  if (d < 31) return `${d} ${plural(d, "день", "дня", "дней")} назад`;
+  if (d < 31) return ago(d, "день", "дня", "дней");
   const mo = Math.floor(d / 30.44);
-  if (mo < 12) return `${mo} ${plural(mo, "месяц", "месяца", "месяцев")} назад`;
+  if (mo < 12) return ago(mo, "месяц", "месяца", "месяцев");
   const y = Math.floor(d / 365.25);
-  return `${y} ${plural(y, "год", "года", "лет")} назад`;
+  return ago(y, "год", "года", "лет");
 }
 
 export function fmtDate(unix: number): string {
   if (!unix) return "—";
-  return new Date(unix * 1000).toLocaleDateString("ru-RU", { day: "numeric", month: "short", year: "numeric" });
+  return new Date(unix * 1000).toLocaleDateString(locale(), { day: "numeric", month: "short", year: "numeric" });
 }
 
 export function fmtDateTime(unix: number): string {
   if (!unix) return "—";
-  return new Date(unix * 1000).toLocaleString("ru-RU", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+  return new Date(unix * 1000).toLocaleString(locale(), { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
 }
 
 export interface Category {
@@ -87,7 +92,7 @@ export interface Category {
 }
 
 /** Категории файлов — те же номера, что в categories.rs. */
-export const CATEGORIES: Record<number, Category> = {
+const CATS: Record<number, Category> = {
   0: { name: "Прочее", color: "#6b7391" },
   1: { name: "Видео", color: "#f0689a" },
   2: { name: "Аудио", color: "#b98cf5" },
@@ -104,7 +109,8 @@ export const CATEGORIES: Record<number, Category> = {
 };
 
 export function catOf(cat: number): Category {
-  return CATEGORIES[cat] ?? CATEGORIES[0];
+  const c = CATS[cat] ?? CATS[0];
+  return { name: t(c.name), color: c.color };
 }
 
 export const F_DIR = 1,

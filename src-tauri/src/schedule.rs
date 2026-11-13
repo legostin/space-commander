@@ -147,11 +147,11 @@ fn schtasks(args: &[&str]) -> Result<(), String> {
         .args(args)
         .creation_flags(CREATE_NO_WINDOW)
         .output()
-        .map_err(|e| format!("Не удалось запустить schtasks: {}", e))?;
+        .map_err(|e| format!("{}: {}", tr("Не удалось запустить schtasks", "Could not run schtasks"), e))?;
     if out.status.success() {
         Ok(())
     } else {
-        Err(format!("Планировщик Windows отклонил операцию (код {})", out.status.code().unwrap_or(-1)))
+        Err(format!("{} ({})", tr("Планировщик Windows отклонил операцию", "Windows Task Scheduler rejected the operation"), out.status.code().unwrap_or(-1)))
     }
 }
 
@@ -175,24 +175,24 @@ fn valid_time(t: &str) -> bool {
 /// задача работала от батареи и запускалась позже, если компьютер был выключен.
 pub fn task_xml(task: &Task, exe: &str, user: &str) -> Result<String, String> {
     if !valid_time(&task.time) {
-        return Err("Время должно быть в формате ЧЧ:ММ".into());
+        return Err(tr("Время должно быть в формате ЧЧ:ММ", "Time must be in HH:MM format").into());
     }
     let schedule = match task.kind.as_str() {
         "daily" => "<ScheduleByDay><DaysInterval>1</DaysInterval></ScheduleByDay>".to_string(),
         "weekly" => {
             let days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
-            let d = days.get(task.weekday.saturating_sub(1) as usize).ok_or("Неверный день недели")?;
+            let d = days.get(task.weekday.saturating_sub(1) as usize).ok_or(tr("Неверный день недели", "Invalid day of the week"))?;
             format!("<ScheduleByWeek><DaysOfWeek><{} /></DaysOfWeek><WeeksInterval>1</WeeksInterval></ScheduleByWeek>", d)
         }
         "monthly" => {
             if !(1..=28).contains(&task.monthday) {
-                return Err("День месяца — от 1 до 28".into());
+                return Err(tr("День месяца — от 1 до 28", "Day of month must be 1 to 28").into());
             }
             let months = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
             let m: String = months.iter().map(|m| format!("<{} />", m)).collect();
             format!("<ScheduleByMonth><DaysOfMonth><Day>{}</Day></DaysOfMonth><Months>{}</Months></ScheduleByMonth>", task.monthday, m)
         }
-        _ => return Err("Неизвестный тип расписания".into()),
+        _ => return Err(tr("Неизвестный тип расписания", "Unknown schedule type").into()),
     };
     let run_level = if task.elevated { "HighestAvailable" } else { "LeastPrivilege" };
     Ok(format!(
@@ -245,7 +245,7 @@ pub fn task_xml(task: &Task, exe: &str, user: &str) -> Result<String, String> {
 
 fn register(task: &Task) -> Result<(), String> {
     if task.elevated && !winutil::is_elevated() {
-        return Err("Задачу с правами администратора можно создать, только когда само приложение запущено с ними".into());
+        return Err(tr("Задачу с правами администратора можно создать, только когда само приложение запущено с ними", "A task with administrator rights can only be created while the app itself runs as administrator").into());
     }
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let xml = task_xml(task, &exe.to_string_lossy(), &winutil::user_name())?;
@@ -274,14 +274,14 @@ fn valid_id(id: &str) -> bool {
 
 pub fn save_task(mut task: Task) -> Result<Task, String> {
     if task.name.trim().is_empty() {
-        return Err("Дайте задаче название".into());
+        return Err(tr("Дайте задаче название", "Give the task a name").into());
     }
     if task.id.is_empty() {
         let ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0);
         task.id = format!("task-{:x}", ms);
     }
     if !valid_id(&task.id) {
-        return Err("Недопустимый идентификатор задачи".into());
+        return Err(tr("Недопустимый идентификатор задачи", "Invalid task id").into());
     }
     register(&task)?;
     task.registered = true;
@@ -319,7 +319,7 @@ pub fn refresh_registrations() {
 
 pub fn delete_task(id: &str) -> Result<(), String> {
     if !valid_id(id) {
-        return Err("Недопустимый идентификатор задачи".into());
+        return Err(tr("Недопустимый идентификатор задачи", "Invalid task id").into());
     }
     if is_registered(id) {
         schtasks(&["/Delete", "/F", "/TN", &task_name(id)])?;
@@ -331,7 +331,7 @@ pub fn delete_task(id: &str) -> Result<(), String> {
 
 pub fn run_task_now(id: &str) -> Result<(), String> {
     if !valid_id(id) {
-        return Err("Недопустимый идентификатор задачи".into());
+        return Err(tr("Недопустимый идентификатор задачи", "Invalid task id").into());
     }
     schtasks(&["/Run", "/TN", &task_name(id)])
 }

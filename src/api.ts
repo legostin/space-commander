@@ -77,9 +77,49 @@ export interface ScanSummary {
   hidden_alloc: number;
   hidden_files: number;
 }
+export interface SnapMeta {
+  id: string;
+  root: string;
+  mode: string;
+  taken_at: number;
+  alloc: number;
+  files: number;
+}
+export interface DiffItem {
+  path: string;
+  dir: boolean;
+  old: number;
+  new: number;
+  delta: number;
+  is_new: boolean;
+  gone: boolean;
+}
+export interface Diff {
+  base: SnapMeta;
+  current: SnapMeta;
+  delta: number;
+  delta_files: number;
+  mixed_modes: boolean;
+  items: DiffItem[];
+}
+export interface InstalledApp {
+  name: string;
+  source: "steam" | "epic" | "gog" | "program";
+  path: string;
+  publisher: string;
+  reported_size: number;
+  last_played: number;
+  uninstall: string;
+  size: number;
+  alloc: number;
+  mtime: number;
+  node: number | null;
+  root: string;
+}
 export interface ScanProgress {
   root: string;
   mode: string;
+  quiet: boolean;
   files: number;
   dirs: number;
   bytes: number;
@@ -106,12 +146,14 @@ export interface JunkItem {
   targets: JunkTarget[];
   hint: string;
   action: string;
+  running: boolean;
 }
 export interface CleanReport {
   freed: number;
   files: number;
   failed: number;
   errors: string[];
+  skipped: string[];
   items: { id: string; title: string; freed: number; files: number; failed: number }[];
 }
 export interface Artifact {
@@ -147,6 +189,9 @@ export interface Task {
   elevated: boolean;
   enabled: boolean;
   registered: boolean;
+  only_below_pct: number;
+  watch_growth_gb: number;
+  exe: string;
 }
 export interface RunLog {
   task_id: string;

@@ -1,12 +1,13 @@
 import { useEffect, useRef, useState } from "react";
-import { ArrowUp, ChevronRight, Cloud, EyeOff, File, Folder, FolderOpen, LayoutGrid, Link2, Lock, RefreshCw, Settings, Trash2 } from "lucide-react";
+import { ArrowUp, ChevronRight, Cloud, Download, EyeOff, File, Folder, FolderOpen, LayoutGrid, Link2, Lock, RefreshCw, Settings, Trash2 } from "lucide-react";
 import { call, DirView, NodeDto, SubNode } from "../api";
 import { catOf, F_CLOUD, F_DENIED, F_HIDDEN, F_REPARSE, F_SYSTEM, fmtAgo, fmtBytes, fmtCount, fmtPct } from "../format";
-import { VisibilityToggles } from "../components/Chrome";
-import { useStore } from "../store";
-import { Bar, ContextMenu, Empty, MenuItem, Size } from "../components/ui";
+import { t } from "../i18n";
+import { isDriveRoot, useStore } from "../store";
+import { Bar, ContextMenu, Empty, MenuItem, Size, Spinner } from "../components/ui";
 import { Treemap } from "../components/Treemap";
-import { fileMenu } from "../components/DeleteDialog";
+import { exportCsv, fileMenu } from "../components/DeleteDialog";
+import { VisibilityToggles } from "../components/Chrome";
 
 function joinPath(base: string, name: string) {
   return base.endsWith("\\") ? base + name : `${base}\\${name}`;
@@ -42,9 +43,10 @@ export function Explorer() {
         if (stale) return;
         setView(v);
         setSub(s);
+        useStore.setState({ currentPath: v.path });
       })
       .catch(() => {
-        // Папку удалили или диск пересканировали — возвращаемся в корень.
+        // Папку удалили, скрыли фильтром или диск пересканировали — возвращаемся в корень.
         if (!stale && nodeId !== 0) navigate(0);
       });
     return () => {
@@ -81,12 +83,12 @@ export function Explorer() {
       <div className="page center">
         <Empty
           icon={<LayoutGrid size={30} />}
-          title="Карта появится после сканирования"
-          text="Сканирование только читает структуру папок — файлы не открываются и не изменяются."
+          title={t("Карта появится после сканирования")}
+          text={t("Сканирование только читает структуру папок — файлы не открываются и не изменяются.")}
           action={
             d && (
               <button className="btn primary" disabled={!!scanning} onClick={() => void startScan(d.root, "auto")}>
-                Сканировать {d.letter}:
+                {t("Сканировать {0}:", d.letter)}
               </button>
             )
           }
@@ -99,6 +101,7 @@ export function Explorer() {
   const total = byAlloc ? view.node.alloc : view.node.size;
   const metric = (n: NodeDto) => (byAlloc ? n.alloc : n.size);
   const hiddenAmount = byAlloc ? scan.hidden_alloc : scan.hidden_size;
+  const refreshing = scanning?.root === root;
 
   // Выбранный объект может лежать глубже текущей папки (щелчок по карте): тогда путь
   // собираем по цепочке родителей в данных карты, а в списке подсвечиваем его предка.
@@ -134,32 +137,35 @@ export function Explorer() {
   return (
     <div className="explorer">
       <div className="toolbar">
-        <button className="icon-btn" onClick={goUp} disabled={view.crumbs.length < 2} title="На уровень выше (Backspace)">
+        <button className="icon-btn" onClick={goUp} disabled={view.crumbs.length < 2} title={t("На уровень выше (Backspace)")}>
           <ArrowUp size={16} />
         </button>
         <div className="crumbs">
           {view.crumbs.map((c, i) => (
             <span key={c.id} className="crumb-wrap">
               {i > 0 && <ChevronRight size={13} />}
-              <button className={i === view.crumbs.length - 1 ? "current" : ""} onClick={() => navigate(c.id)}>
-                {i === 0 ? c.name.replace(/\\$/, "") : c.name}
+              <button className={i === view.crumbs.length - 1 ? "current" : ""} onClick={() => navigate(c.id)} title={i === 0 ? c.name : undefined}>
+                {i === 0 ? (isDriveRoot(c.name) ? c.name.replace(/\\$/, "") : (c.name.split("\\").pop() ?? c.name)) : c.name}
               </button>
             </span>
           ))}
         </div>
         <div className="grow" />
         <VisibilityToggles />
-        <div className="seg" title="«На диске» учитывает сжатие, разрежённые и облачные файлы">
+        <div className="seg" title={t("«На диске» учитывает сжатие, разрежённые и облачные файлы")}>
           <button className={byAlloc ? "on" : ""} onClick={() => setByAlloc(true)}>
-            На диске
+            {t("На диске")}
           </button>
           <button className={!byAlloc ? "on" : ""} onClick={() => setByAlloc(false)}>
-            Размер
+            {t("Размер")}
           </button>
         </div>
-        <button className="btn sm" disabled={!!scanning} onClick={() => void startScan(root, "auto")} title={`Просканировано ${fmtAgo(scan.scanned_at)}`}>
-          <RefreshCw size={13} />
-          Обновить
+        <button className="icon-btn" title={t("Сохранить содержимое папки в CSV")} onClick={() => void exportCsv(root, "dir", nodeId)}>
+          <Download size={15} />
+        </button>
+        <button className="btn sm" disabled={!!scanning} onClick={() => void startScan(root, "auto")} title={t("Просканировано {0}", fmtAgo(scan.scanned_at))}>
+          {refreshing ? <Spinner size={12} /> : <RefreshCw size={13} />}
+          {t("Обновить")}
         </button>
       </div>
 
@@ -169,14 +175,14 @@ export function Explorer() {
             <div>
               <Size bytes={total} className="big" />
               <span>
-                {fmtCount(view.node.files)} файлов · {view.children.length} объектов
+                {fmtCount(view.node.files)} {t("файлов")} · {t("объектов: {0}", view.children.length)}
               </span>
             </div>
             {hiddenAmount > 0 && (
-              <button className="hidden-note" onClick={() => void setVisibility(true, true)} title="Показать скрытые и системные объекты">
+              <button className="hidden-note" onClick={() => void setVisibility(true, true)} title={t("Показать скрытые и системные объекты")}>
                 <EyeOff size={12} />
-                На диске ещё {fmtBytes(hiddenAmount)} — скрыто фильтром
-                <span>Показать</span>
+                {t("На диске ещё {0} — скрыто фильтром", fmtBytes(hiddenAmount))}
+                <span>{t("Показать")}</span>
               </button>
             )}
           </div>
@@ -201,26 +207,26 @@ export function Explorer() {
                     <span className="list-name">
                       <span className="ellipsis">{c.name}</span>
                       {c.flags & F_SYSTEM ? (
-                        <span title="Системный объект">
+                        <span title={t("Системный объект")}>
                           <Settings size={11} />
                         </span>
                       ) : c.flags & F_HIDDEN ? (
-                        <span title="Скрытый объект">
+                        <span title={t("Скрытый объект")}>
                           <EyeOff size={11} />
                         </span>
                       ) : null}
                       {c.flags & F_DENIED ? (
-                        <span title="Нет доступа — размер неизвестен">
+                        <span title={t("Нет доступа — размер неизвестен")}>
                           <Lock size={11} className="tone-warn" />
                         </span>
                       ) : null}
                       {c.flags & F_REPARSE ? (
-                        <span title="Ссылка на другое место — не учитывается">
+                        <span title={t("Ссылка на другое место — не учитывается")}>
                           <Link2 size={11} />
                         </span>
                       ) : null}
                       {c.flags & F_CLOUD ? (
-                        <span title="Облачный файл — на диске занимает меньше">
+                        <span title={t("Облачный файл — на диске занимает меньше")}>
                           <Cloud size={11} />
                         </span>
                       ) : null}
@@ -232,7 +238,7 @@ export function Explorer() {
                 </div>
               );
             })}
-            {view.children.length === 0 && <div className="list-empty">Папка пуста{view.node.flags & F_DENIED ? " или закрыта для чтения" : ""}</div>}
+            {view.children.length === 0 && <div className="list-empty">{view.node.flags & F_DENIED ? t("Папка закрыта для чтения") : t("Папка пуста")}</div>}
           </div>
         </div>
 
@@ -254,21 +260,27 @@ export function Explorer() {
             <span className="dot" style={{ background: sel.dir ? "#ffc46b" : catOf(sel.cat).color }} />
             <b className="ellipsis">{sel.path}</b>
             <span>{fmtBytes(sel.size)}</span>
-            {sel.dir ? <span>{fmtCount(sel.files)} файлов</span> : <span>{catOf(sel.cat).name}</span>}
-            {sel.mtime > 0 && <span>изменён {fmtAgo(sel.mtime)}</span>}
+            {sel.dir ? (
+              <span>
+                {fmtCount(sel.files)} {t("файлов")}
+              </span>
+            ) : (
+              <span>{catOf(sel.cat).name}</span>
+            )}
+            {sel.mtime > 0 && <span>{t("изменён {0}", fmtAgo(sel.mtime))}</span>}
             <span className="grow" />
-            <button className="btn sm ghost" onClick={() => void call("reveal", { path: sel!.path }).catch((e) => toast("error", "Не удалось открыть Проводник", String(e)))}>
+            <button className="btn sm ghost" onClick={() => void call("reveal", { path: sel!.path }).catch((e) => toast("error", t("Не удалось открыть Проводник"), String(e)))}>
               <FolderOpen size={13} />
-              В Проводнике
+              {t("В Проводнике")}
             </button>
             <button className="btn sm ghost danger-text" onClick={() => askDelete({ root, items: [{ id: sel!.id, name: sel!.name, size: sel!.size }], permanent: false })}>
               <Trash2 size={13} />
-              В Корзину
+              {t("В Корзину")}
             </button>
           </>
         ) : (
           <>
-            <span>Щелчок — выбрать · двойной щелчок — войти в папку · правая кнопка — действия</span>
+            <span>{t("Щелчок — выбрать · двойной щелчок — войти в папку · правая кнопка — действия")}</span>
             <span className="grow" />
             <span className="legend">
               {[1, 3, 4, 5, 6, 7, 8, 10, 9, 0].map((c) => (

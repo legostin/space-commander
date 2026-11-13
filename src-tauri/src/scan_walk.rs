@@ -225,9 +225,9 @@ pub fn scan(root: &str, progress: &Progress) -> Result<Tree, String> {
     let ext = winutil::extended(root_path.trim_end_matches('\\'));
     let wroot: Vec<u16> = ext.encode_utf16().collect();
 
-    let meta = std::fs::metadata(&root_path).map_err(|e| format!("Не удалось открыть {}: {}", root_path, e))?;
+    let meta = std::fs::metadata(&root_path).map_err(|e| format!("{} {}: {}", crate::i18n::tr("Не удалось открыть", "Could not open"), root_path, e))?;
     if !meta.is_dir() {
-        return Err(format!("{} — не папка", root_path));
+        return Err(format!("{} — {}", root_path, crate::i18n::tr("не папка", "not a folder")));
     }
 
     let ctx = Ctx {
