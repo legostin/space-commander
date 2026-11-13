@@ -431,7 +431,7 @@ pub fn run_headless(id: &str) -> i32 {
     if !missing.is_empty() {
         log_line(&format!("задача {}: в окружении нет переменных {:?} — часть правил будет пропущена", id, missing));
     }
-    i18n::set_english(load_settings().lang == "en");
+    i18n::set_english(!matches!(load_settings().lang.as_str(), "ru" | ""));
 
     // Условие «только когда места мало» проверяем по системному диску.
     let sys_root = winutil::volume_root(&std::env::var("SystemDrive").unwrap_or_else(|_| "C:".into()));

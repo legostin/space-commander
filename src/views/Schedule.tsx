@@ -2,19 +2,22 @@ import { useEffect, useState } from "react";
 import { Bell, CalendarClock, Lock, Pencil, Play, Plus, Trash2, TrendingUp, TriangleAlert } from "lucide-react";
 import { call, JunkItem, RunLog, Task } from "../api";
 import { fmtBytes, fmtDateTime, fmtNum } from "../format";
-import { getLang, t } from "../i18n";
+import { getLang, getLocale, t } from "../i18n";
 import { useStore } from "../store";
 import { Check, Confirm, Empty, Modal, Size, Spinner, Toggle } from "../components/ui";
 
 const WEEKDAYS_RU = ["понедельник", "вторник", "среду", "четверг", "пятницу", "субботу", "воскресенье"];
-const WEEKDAYS_EN = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
 const WEEKDAYS_SHORT = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"];
 
 export function describeSchedule(task: Task): string {
-  if (getLang() === "en") {
-    if (task.kind === "daily") return `Every day at ${task.time}`;
-    if (task.kind === "weekly") return `Every ${WEEKDAYS_EN[task.weekday - 1] ?? ""} at ${task.time}`;
-    return `On day ${task.monthday} of every month at ${task.time}`;
+  if (getLang() !== "ru") {
+    if (task.kind === "daily") return t("@daily", task.time);
+    if (task.kind === "weekly") {
+      // 1 января 2024 года — понедельник; название дня берём у Intl на языке интерфейса.
+      const day = new Intl.DateTimeFormat(getLocale().intl, { weekday: "long" }).format(new Date(2024, 0, Math.min(7, Math.max(1, task.weekday))));
+      return t("@weekly", day, task.time);
+    }
+    return t("@monthly", task.monthday, task.time);
   }
   if (task.kind === "daily") return `Каждый день в ${task.time}`;
   if (task.kind === "weekly") {

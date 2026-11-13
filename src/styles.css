@@ -147,7 +147,7 @@ p {
 }
 .body {
   display: grid;
-  grid-template-columns: 228px 1fr;
+  grid-template-columns: 248px 1fr;
   min-height: 0;
 }
 .main {
@@ -160,7 +160,7 @@ p {
 /* ── Шапка ── */
 .titlebar {
   display: grid;
-  grid-template-columns: 228px 1fr auto;
+  grid-template-columns: 248px 1fr auto;
   align-items: center;
   border-bottom: 1px solid var(--line);
 }
@@ -2067,8 +2067,6 @@ kbd {
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--text2);
-  direction: rtl;
-  text-align: left;
 }
 .path-list li span em {
   font-style: normal;
@@ -2612,13 +2610,13 @@ kbd {
 }
 /* Длинный путь обрезается слева: самое важное — конец пути. */
 .rtl,
-.path-list li span {
+.path-list.paths li span {
   direction: rtl;
   text-align: left;
 }
 /* Невидимая метка «слева направо» не даёт знакам вроде «C:\» переехать в конец строки. */
 .rtl::before,
-.path-list li span::before {
+.path-list.paths li span::before {
   content: "\200E";
 }
 .folder-scans {
@@ -2892,3 +2890,19 @@ kbd {
 :root[data-theme="light"] .tabs {
   background: rgba(var(--tint), 0.07);
 }
+
+/* Длинные названия разделов в других языках не переносятся на вторую строку. */
+.nav-item span {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+/* «Размер скрыт» на других языках длиннее — не переносим. */
+.junk-size {
+  width: auto;
+  min-width: 92px;
+  white-space: nowrap;
+}
+

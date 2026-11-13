@@ -1,12 +1,19 @@
-import { getLang, plural, t } from "./i18n";
+import { getLocale, plural, t } from "./i18n";
 
 export { plural };
 
-const UNITS_RU = ["Б", "КБ", "МБ", "ГБ", "ТБ", "ПБ"];
-const UNITS_EN = ["B", "KB", "MB", "GB", "TB", "PB"];
-const en = () => getLang() === "en";
-const locale = () => (en() ? "en-US" : "ru-RU");
-const dec = (s: string) => (en() ? s : s.replace(".", ","));
+const locale = () => getLocale().intl;
+const separators = new Map<string, string>();
+/** Десятичный разделитель языка: «1,5» по-русски и по-немецки, «1.5» по-английски. */
+function dec(s: string): string {
+  const tag = locale();
+  let sep = separators.get(tag);
+  if (sep === undefined) {
+    sep = new Intl.NumberFormat(tag).formatToParts(1.5).find((p) => p.type === "decimal")?.value ?? ".";
+    separators.set(tag, sep);
+  }
+  return sep === "." ? s : s.replace(".", sep);
+}
 
 /** 1536 → «1,5 КБ». Три значащие цифры, запятая как десятичный разделитель. */
 export function fmtBytes(bytes: number): string {
@@ -15,7 +22,7 @@ export function fmtBytes(bytes: number): string {
 }
 
 export function splitBytes(bytes: number): [string, string] {
-  const units = en() ? UNITS_EN : UNITS_RU;
+  const units = getLocale().units;
   if (!isFinite(bytes) || bytes <= 0) return ["0", units[0]];
   let v = bytes;
   let i = 0;
@@ -38,9 +45,9 @@ export function fmtNum(n: number): string {
 
 /** Короткое число: 1 928 468 → «1,9 млн». */
 export function fmtCount(n: number): string {
-  if (n >= 1e6) return `${dec((n / 1e6).toFixed(1))} ${en() ? "M" : "млн"}`;
-  if (n >= 1e4) return `${Math.round(n / 1e3)} ${en() ? "K" : "тыс."}`;
-  return fmtNum(n);
+  if (n < 1e4) return fmtNum(n);
+  // Сокращения у каждого языка свои: «1,9 млн», «1.9M», «1,9 Mio.», «193万».
+  return new Intl.NumberFormat(locale(), { notation: "compact", maximumFractionDigits: n >= 1e6 ? 1 : 0 }).format(n);
 }
 
 export function fmtPct(part: number, total: number, digits = 1): string {
@@ -63,17 +70,17 @@ export function fmtAgo(unix: number): string {
   if (!unix) return "—";
   const s = Math.max(0, Date.now() / 1000 - unix);
   if (s < 60) return t("только что");
-  const ago = (n: number, one: string, few: string, many: string) => t("{0} назад", `${n} ${plural(n, one, few, many)}`);
+  // Падежи и порядок слов у каждого языка свои — их знает Intl.
+  const rtf = new Intl.RelativeTimeFormat(locale(), { numeric: "always" });
   const m = Math.floor(s / 60);
-  if (m < 60) return ago(m, "минуту", "минуты", "минут");
+  if (m < 60) return rtf.format(-m, "minute");
   const h = Math.floor(m / 60);
-  if (h < 24) return ago(h, "час", "часа", "часов");
+  if (h < 24) return rtf.format(-h, "hour");
   const d = Math.floor(h / 24);
-  if (d < 31) return ago(d, "день", "дня", "дней");
+  if (d < 31) return rtf.format(-d, "day");
   const mo = Math.floor(d / 30.44);
-  if (mo < 12) return ago(mo, "месяц", "месяца", "месяцев");
-  const y = Math.floor(d / 365.25);
-  return ago(y, "год", "года", "лет");
+  if (mo < 12) return rtf.format(-mo, "month");
+  return rtf.format(-Math.floor(d / 365.25), "year");
 }
 
 export function fmtDate(unix: number): string {

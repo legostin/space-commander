@@ -126,9 +126,11 @@ fn open_settings(uri: String) -> Result<(), String> {
 
 #[tauri::command]
 fn set_language(lang: String) {
-    let en = lang == "en";
-    i18n::set_english(en);
-    let _ = schedule::save_settings(&schedule::Settings { lang: if en { "en" } else { "ru" }.into() });
+    // Ядро говорит по-русски и по-английски; для остальных языков интерфейса — по-английски,
+    // а тексты правил очистки интерфейс переводит сам по идентификатору правила.
+    let code: String = lang.chars().filter(|c| c.is_ascii_alphabetic()).take(8).collect::<String>().to_lowercase();
+    i18n::set_english(code != "ru");
+    let _ = schedule::save_settings(&schedule::Settings { lang: code });
 }
 
 /// Системный диалог выбора папки для сканирования.
@@ -684,7 +686,7 @@ pub fn run() {
         let code = args.get(pos + 1).map(|id| schedule::run_headless(id)).unwrap_or(2);
         std::process::exit(code);
     }
-    i18n::set_english(schedule::load_settings().lang == "en");
+    i18n::set_english(!matches!(schedule::load_settings().lang.as_str(), "ru" | ""));
 
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())

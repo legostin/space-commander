@@ -259,7 +259,7 @@ function Changes({ root }: { root: string }) {
         <div className="grow" />
         {diff && (
           <span className="diff-total">
-            {t("Всего:")} <b className={diff.delta > 0 ? "tone-bad" : "tone-ok"}>{fmtDelta(diff.delta)}</b> · {t("файлов")} {diff.delta_files >= 0 ? "+" : "−"}
+            {t("Всего:")} <b className={diff.delta > 0 ? "tone-bad" : "tone-ok"}>{fmtDelta(diff.delta)}</b> · {t("Файлов")} {diff.delta_files >= 0 ? "+" : "−"}
             {fmtNum(Math.abs(diff.delta_files))}
           </span>
         )}

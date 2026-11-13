@@ -1,5 +1,5 @@
 import { Monitor, Moon, Sun } from "lucide-react";
-import { t } from "../i18n";
+import { LANGS, t } from "../i18n";
 import { Theme, useStore } from "../store";
 import { Modal } from "./ui";
 
@@ -36,14 +36,13 @@ export function SettingsDialog() {
         </div>
         <div className="field">
           <span>{t("Язык")}</span>
-          <div className="seg">
-            <button className={lang === "ru" ? "on" : ""} onClick={() => setLanguage("ru")}>
-              Русский
-            </button>
-            <button className={lang === "en" ? "on" : ""} onClick={() => setLanguage("en")}>
-              English
-            </button>
-          </div>
+          <select className="select" value={lang} onChange={(e) => setLanguage(e.target.value)}>
+            {LANGS.map((l) => (
+              <option key={l.code} value={l.code}>
+                {l.name}
+              </option>
+            ))}
+          </select>
         </div>
         <div className="field">
           <span>{t("Показывать на карте и в списках")}</span>

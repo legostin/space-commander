@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import { call, Drive, JunkItem, Privilege, ScanProgress, ScanSummary } from "./api";
-import { getLang, Lang, setLang, t } from "./i18n";
+import { getLang, Lang, ruleText, setLang, t } from "./i18n";
 
 export type View = "overview" | "explorer" | "analysis" | "cleanup" | "schedule" | "access";
 export type Theme = "system" | "dark" | "light";
@@ -207,7 +207,9 @@ export const useStore = create<State>((set, get) => ({
     if (get().junkLoading) return;
     set({ junkLoading: true });
     try {
-      set({ junk: await call<JunkItem[]>("junk_scan") });
+      // Тексты правил ядро присылает по-русски или по-английски; остальные языки — из словаря.
+      const items = await call<JunkItem[]>("junk_scan");
+      set({ junk: items.map((j) => ({ ...j, ...ruleText(j) })) });
     } finally {
       set({ junkLoading: false });
     }

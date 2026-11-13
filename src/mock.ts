@@ -1,8 +1,28 @@
 // Демо-данные для предпросмотра интерфейса в обычном браузере (без Tauri).
 // В собранном приложении этот модуль не вызывается.
 
+import { getLang } from "./i18n";
+
 const GB = 1024 ** 3;
 const MB = 1024 ** 2;
+
+/** Русские подписи демо-данных → английские, когда интерфейс не на русском. */
+const DEMO_EN: [string, string][] = [
+  ["Еженедельная уборка", "Weekly cleanup"],
+  ["Корзина на всех дисках", "Recycle Bin on all drives"],
+  ["Система", "System"],
+  ["Архив", "Archive"],
+  ["Флешка", "USB drive"],
+  ["Записи", "Recordings"],
+  ["файл занят другим процессом", "the file is in use by another process"],
+];
+
+function localize<T>(value: T): T {
+  if (getLang() === "ru" || value == null) return value;
+  let json = JSON.stringify(value);
+  for (const [ru, en] of DEMO_EN) json = json.split(ru).join(en);
+  return JSON.parse(json) as T;
+}
 
 interface MNode {
   id: number;
@@ -134,13 +154,15 @@ const junk = [
   ["old-installers", "downloads", "Старые установщики в «Загрузках»", "Установщики и образы дисков, которые лежат в «Загрузках» больше 90 дней. Скорее всего, программы уже установлены.", "caution", false, 6.4 * GB, 23, "C:\\Users\\commander\\Downloads"],
   ["hiberfil", "info", "Файл гибернации", "Сюда Windows сохраняет память при гибернации и быстром запуске. Размер — около 40% оперативной памяти.", "info", false, 24.65 * GB, 1, "C:\\hiberfil.sys"],
   ["docker-wsl", "info", "Виртуальные диски Docker и WSL", "Файлы .vhdx растут по мере использования и сами не уменьшаются, даже если внутри всё удалить.", "info", false, 43.68 * GB, 1, "C:\\Users\\commander\\AppData\\Local\\wsl\\{2e5d6add}\\ext4.vhdx"],
+  ["winsxs", "info", "Хранилище компонентов Windows (WinSxS)", "Все версии системных файлов для обновлений и восстановления. Большая часть — жёсткие ссылки на файлы в самой Windows, поэтому реально занято меньше, чем показано.", "info", false, 19.2 * GB, 148000, "C:\\Windows\\WinSxS"],
+  ["restore-points", "info", "Точки восстановления и теневые копии", "Снимки системы для отката после неудачных обновлений и драйверов. Хранятся в закрытой папке System Volume Information.", "info", true, 0, 0, "C:\\System Volume Information"],
 ].map(([id, category, title, desc, safety, needs_admin, size, files, path]) => ({
   id, category, title, desc, safety, needs_admin,
   admin_reason: needs_admin ? "Папка принадлежит системе: читать и удалять в ней могут только администраторы и сама Windows." : "",
   accessible: !(needs_admin && size === 0), size, files,
   targets: path ? [{ path, size, files }, ...(id === "shader-cache" ? [{ path: "C:\\Users\\commander\\AppData\\Local\\D3DSCache", size: 12 * MB, files: 218 }] : [])] : [],
-  hint: id === "hiberfil" ? "Отключается командой powercfg /h off в терминале администратора. Пропадут гибернация и быстрый запуск." : id === "docker-wsl" ? "Сначала docker system prune -a, затем wsl --shutdown и сжатие диска: Optimize-VHD или diskpart → compact vdisk." : "",
-  action: "",
+  hint: id === "hiberfil" ? "Отключается командой powercfg /h off в терминале администратора. Пропадут гибернация и быстрый запуск." : id === "docker-wsl" ? "Сначала docker system prune -a, затем wsl --shutdown и сжатие диска: Optimize-VHD или diskpart → compact vdisk." : id === "winsxs" ? "Старые версии компонентов убирает «Очистка диска» → «Очистить системные файлы»." : id === "restore-points" ? "Лимит места и удаление старых точек: «Защита системы» → выберите диск → «Настроить»." : "",
+  action: id === "restore-points" ? "tool:system-protection" : id === "winsxs" ? "tool:disk-cleanup" : "",
   running: id === "chromium:google\\chrome" || id === "chromium:claude",
 }));
 
@@ -337,5 +359,5 @@ export async function mockCall<T>(cmd: string, a: Record<string, any>): Promise<
       default: return null;
     }
   })();
-  return r as T;
+  return localize(r as T);
 }

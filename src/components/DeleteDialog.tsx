@@ -48,7 +48,7 @@ export function DeleteDialog() {
           : t("{0} на {1} можно будет вернуть из Корзины.", count, fmtBytes(total))
       }
     >
-      <ul className="path-list">
+      <ul className="path-list paths">
         {ask.items.slice(0, 8).map((i) => (
           <li key={i.id}>
             <span>{i.name}</span>
